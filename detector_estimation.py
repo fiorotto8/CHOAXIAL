@@ -18,6 +18,7 @@ SECONDS_PER_YEAR = 365.25 * 24.0 * 3600.0
 CF4_MOLAR_MASS_KG_PER_MOL = 88.0043e-3
 CF4_ELECTRONS_PER_MOLECULE = 42.0
 
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join("configs", "detector_config.json")
 DEFAULT_INPUT_NUCLEAR_RATE_CSV = os.path.join(
     "cevens_rate_output",
@@ -28,9 +29,21 @@ DEFAULT_INPUT_ELECTRON_RATE_CSV = os.path.join(
     "cf4_electron_differential_rate_per_molecule.csv",
 )
 DEFAULT_OUTPUT_DIR = "detector_rate_output"
+DEFAULT_CARBON_QF_CSV = os.path.join(REPO_DIR, "QF", "C_in_CF4.csv")
+DEFAULT_FLUORINE_QF_CSV = os.path.join(REPO_DIR, "QF", "F_in_CF4.csv")
 
 REQUIRED_NUCLEAR_COLUMNS = (
     "Er_keV",
+    "dR_dEr_C_prompt_total_per_s_per_keV_per_C",
+    "dR_dEr_C_nue_total_per_s_per_keV_per_C",
+    "dR_dEr_C_numubar_total_per_s_per_keV_per_C",
+    "dR_dEr_C_delayed_total_per_s_per_keV_per_C",
+    "dR_dEr_C_total_per_s_per_keV_per_C",
+    "dR_dEr_F_prompt_total_per_s_per_keV_per_F",
+    "dR_dEr_F_nue_total_per_s_per_keV_per_F",
+    "dR_dEr_F_numubar_total_per_s_per_keV_per_F",
+    "dR_dEr_F_delayed_total_per_s_per_keV_per_F",
+    "dR_dEr_F_total_per_s_per_keV_per_F",
     "dR_dEr_CF4_prompt_total_per_s_per_keV_per_molecule",
     "dR_dEr_CF4_nue_total_per_s_per_keV_per_molecule",
     "dR_dEr_CF4_numubar_total_per_s_per_keV_per_molecule",
@@ -70,6 +83,37 @@ class DetectorConfig:
     pressure_label: str
     temperature_k: float
     energy_threshold_kev: float
+
+
+@dataclass(frozen=True)
+class QuenchingCurve:
+    label: str
+    recoil_energy_kev: np.ndarray
+    quenching_factor: np.ndarray
+
+    def evaluate(self, recoil_energy_kev: np.ndarray) -> np.ndarray:
+        # Piecewise-linear interpolation inside the tabulated range, with the
+        # endpoint QF values held fixed below/above the table.
+        return np.interp(
+            recoil_energy_kev,
+            self.recoil_energy_kev,
+            self.quenching_factor,
+            left=self.quenching_factor[0],
+            right=self.quenching_factor[-1],
+        )
+
+    def electron_equivalent_energy(self, recoil_energy_kev: np.ndarray) -> np.ndarray:
+        return recoil_energy_kev * self.evaluate(recoil_energy_kev)
+
+    def recoil_threshold_for_ee(self, threshold_kevee: float) -> float:
+        if threshold_kevee <= 0.0:
+            return 0.0
+
+        eee_grid_kev = self.electron_equivalent_energy(self.recoil_energy_kev)
+        if threshold_kevee >= eee_grid_kev[-1]:
+            return float("inf")
+
+        return float(np.interp(threshold_kevee, eee_grid_kev, self.recoil_energy_kev))
 
 
 def positive_float(value: object, label: str) -> float:
@@ -216,6 +260,40 @@ def load_rate_table(
     return table
 
 
+def load_quenching_curve(filename: str, label: str) -> QuenchingCurve:
+    data = np.loadtxt(filename, delimiter=",", dtype=float)
+    if data.ndim != 2 or data.shape[1] != 2:
+        raise ValueError(f"{filename} must contain exactly two numeric columns: energy_keV, QF.")
+
+    recoil_energy_kev = np.asarray(data[:, 0], dtype=float)
+    quenching_factor = np.asarray(data[:, 1], dtype=float)
+
+    if recoil_energy_kev.size < 2:
+        raise ValueError(f"{filename} must contain at least two tabulated QF points.")
+    if np.any(~np.isfinite(recoil_energy_kev)) or np.any(~np.isfinite(quenching_factor)):
+        raise ValueError(f"{filename} contains non-finite QF values.")
+    if np.any(np.diff(recoil_energy_kev) <= 0.0):
+        raise ValueError(f"QF recoil energies must be strictly increasing in {filename}.")
+    if np.any(quenching_factor <= 0.0):
+        raise ValueError(f"QF values must stay positive in {filename}.")
+
+    if recoil_energy_kev[0] > 0.0:
+        # Extend the first tabulated QF down to zero recoil energy so the
+        # low-energy extrapolation stays explicit and well-defined.
+        recoil_energy_kev = np.concatenate(([0.0], recoil_energy_kev))
+        quenching_factor = np.concatenate(([quenching_factor[0]], quenching_factor))
+
+    eee_grid_kev = recoil_energy_kev * quenching_factor
+    if np.any(np.diff(eee_grid_kev) <= 0.0):
+        raise ValueError(f"Electron-equivalent mapping must be strictly increasing in {filename}.")
+
+    return QuenchingCurve(
+        label=label,
+        recoil_energy_kev=recoil_energy_kev,
+        quenching_factor=quenching_factor,
+    )
+
+
 def cylinder_volume_m3(radius_m: float, length_m: float) -> float:
     return math.pi * radius_m * radius_m * length_m
 
@@ -262,32 +340,238 @@ def append_per_year_spectra(spectra: Dict[str, np.ndarray]) -> Dict[str, np.ndar
     return out
 
 
+def build_nuclear_species_detector_spectra(
+    table: Dict[str, np.ndarray],
+    molecules_fiducial: float,
+) -> tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    carbon_scale = molecules_fiducial
+    fluorine_scale = 4.0 * molecules_fiducial
+
+    carbon_spectra = {
+        "energy_kev": table["Er_keV"],
+        "prompt_per_s": carbon_scale * table["dR_dEr_C_prompt_total_per_s_per_keV_per_C"],
+        "nue_per_s": carbon_scale * table["dR_dEr_C_nue_total_per_s_per_keV_per_C"],
+        "numubar_per_s": carbon_scale * table["dR_dEr_C_numubar_total_per_s_per_keV_per_C"],
+        "delayed_per_s": carbon_scale * table["dR_dEr_C_delayed_total_per_s_per_keV_per_C"],
+        "total_per_s": carbon_scale * table["dR_dEr_C_total_per_s_per_keV_per_C"],
+    }
+
+    fluorine_spectra = {
+        "energy_kev": table["Er_keV"],
+        "prompt_per_s": fluorine_scale * table["dR_dEr_F_prompt_total_per_s_per_keV_per_F"],
+        "nue_per_s": fluorine_scale * table["dR_dEr_F_nue_total_per_s_per_keV_per_F"],
+        "numubar_per_s": fluorine_scale * table["dR_dEr_F_numubar_total_per_s_per_keV_per_F"],
+        "delayed_per_s": fluorine_scale * table["dR_dEr_F_delayed_total_per_s_per_keV_per_F"],
+        "total_per_s": fluorine_scale * table["dR_dEr_F_total_per_s_per_keV_per_F"],
+    }
+
+    if "dR_dEr_F_total_vector_per_s_per_keV_per_F" in table:
+        fluorine_spectra["vector_per_s"] = fluorine_scale * table["dR_dEr_F_total_vector_per_s_per_keV_per_F"]
+    if "dR_dEr_F_total_axial_per_s_per_keV_per_F" in table:
+        fluorine_spectra["axial_per_s"] = fluorine_scale * table["dR_dEr_F_total_axial_per_s_per_keV_per_F"]
+
+    return append_per_year_spectra(carbon_spectra), append_per_year_spectra(fluorine_spectra)
+
+
+def combine_nuclear_species_detector_spectra(
+    carbon_spectra: Dict[str, np.ndarray],
+    fluorine_spectra: Dict[str, np.ndarray],
+) -> Dict[str, np.ndarray]:
+    energy_grid_kev = carbon_spectra["energy_kev"]
+
+    spectra = {"energy_kev": energy_grid_kev}
+    for component in ("prompt", "nue", "numubar", "delayed", "total"):
+        for suffix in ("per_s", "per_year"):
+            key = f"{component}_{suffix}"
+            spectra[key] = carbon_spectra[key] + fluorine_spectra[key]
+
+    spectra["c_piece_per_s"] = carbon_spectra["total_per_s"]
+    spectra["c_piece_per_year"] = carbon_spectra["total_per_year"]
+    spectra["f_piece_per_s"] = fluorine_spectra["total_per_s"]
+    spectra["f_piece_per_year"] = fluorine_spectra["total_per_year"]
+
+    spectra["cf4_f_fraction"] = np.divide(
+        spectra["f_piece_per_s"],
+        spectra["total_per_s"],
+        out=np.zeros_like(spectra["total_per_s"]),
+        where=spectra["total_per_s"] > 0.0,
+    )
+
+    if "vector_per_s" in fluorine_spectra and "axial_per_s" in fluorine_spectra:
+        spectra["f_vector_per_s"] = fluorine_spectra["vector_per_s"]
+        spectra["f_vector_per_year"] = fluorine_spectra["vector_per_year"]
+        spectra["f_axial_per_s"] = fluorine_spectra["axial_per_s"]
+        spectra["f_axial_per_year"] = fluorine_spectra["axial_per_year"]
+        spectra["f_axial_fraction"] = np.divide(
+            spectra["f_axial_per_s"],
+            spectra["f_piece_per_s"],
+            out=np.zeros_like(spectra["f_piece_per_s"]),
+            where=spectra["f_piece_per_s"] > 0.0,
+        )
+
+    return spectra
+
+
 def build_nuclear_detector_spectra(
     table: Dict[str, np.ndarray],
     molecules_fiducial: float,
 ) -> Dict[str, np.ndarray]:
-    scale = molecules_fiducial
+    carbon_spectra, fluorine_spectra = build_nuclear_species_detector_spectra(table, molecules_fiducial)
+    return combine_nuclear_species_detector_spectra(carbon_spectra, fluorine_spectra)
 
-    spectra = {
-        "energy_kev": table["Er_keV"],
-        "prompt_per_s": scale * table["dR_dEr_CF4_prompt_total_per_s_per_keV_per_molecule"],
-        "nue_per_s": scale * table["dR_dEr_CF4_nue_total_per_s_per_keV_per_molecule"],
-        "numubar_per_s": scale * table["dR_dEr_CF4_numubar_total_per_s_per_keV_per_molecule"],
-        "delayed_per_s": scale * table["dR_dEr_CF4_delayed_total_per_s_per_keV_per_molecule"],
-        "total_per_s": scale * table["dR_dEr_CF4_total_per_s_per_keV_per_molecule"],
-        "c_piece_per_s": scale * table["dR_dEr_CF4_C_piece_per_s_per_keV_per_molecule"],
-        "f_piece_per_s": scale * table["dR_dEr_CF4_4F_piece_per_s_per_keV_per_molecule"],
-        "cf4_f_fraction": table["CF4_F_fraction"],
-    }
 
-    if "dR_dEr_F_total_vector_per_s_per_keV_per_F" in table:
-        spectra["f_vector_per_s"] = 4.0 * scale * table["dR_dEr_F_total_vector_per_s_per_keV_per_F"]
-    if "dR_dEr_F_total_axial_per_s_per_keV_per_F" in table:
-        spectra["f_axial_per_s"] = 4.0 * scale * table["dR_dEr_F_total_axial_per_s_per_keV_per_F"]
-    if "F_axial_fraction" in table:
-        spectra["f_axial_fraction"] = table["F_axial_fraction"]
+def build_thresholded_recoil_species_spectra(
+    spectra: Dict[str, np.ndarray],
+    qf_curve: QuenchingCurve,
+    threshold_kevee: float,
+) -> Dict[str, np.ndarray]:
+    threshold_recoil_kev = qf_curve.recoil_threshold_for_ee(threshold_kevee)
+    energy_grid_kev = spectra["energy_kev"]
 
-    return append_per_year_spectra(spectra)
+    thresholded = {"energy_kev": energy_grid_kev}
+    for key, values in spectra.items():
+        if key == "energy_kev":
+            continue
+        thresholded[key] = hard_threshold(energy_grid_kev, values, threshold_recoil_kev)
+
+    return thresholded
+
+
+def transform_species_recoil_spectra_to_ee(
+    spectra: Dict[str, np.ndarray],
+    qf_curve: QuenchingCurve,
+) -> Dict[str, np.ndarray]:
+    recoil_energy_kev = spectra["energy_kev"]
+    energy_kevee = qf_curve.electron_equivalent_energy(recoil_energy_kev)
+    d_eee_d_er = np.gradient(energy_kevee, recoil_energy_kev)
+
+    if np.any(d_eee_d_er <= 0.0):
+        raise ValueError(f"{qf_curve.label} QF produced a non-monotonic keVee mapping.")
+
+    transformed = {"energy_kevee": energy_kevee}
+    for key, values in spectra.items():
+        if key == "energy_kev":
+            continue
+        transformed[key] = np.divide(
+            values,
+            d_eee_d_er,
+            out=np.zeros_like(values),
+            where=d_eee_d_er > 0.0,
+        )
+
+    return transformed
+
+
+def interpolate_spectrum(
+    target_grid: np.ndarray,
+    source_grid: np.ndarray,
+    values: np.ndarray,
+) -> np.ndarray:
+    return np.interp(target_grid, source_grid, values, left=0.0, right=0.0)
+
+
+def build_nuclear_ee_detector_spectra(
+    carbon_spectra: Dict[str, np.ndarray],
+    fluorine_spectra: Dict[str, np.ndarray],
+    carbon_qf: QuenchingCurve,
+    fluorine_qf: QuenchingCurve,
+) -> Dict[str, np.ndarray]:
+    carbon_ee = transform_species_recoil_spectra_to_ee(carbon_spectra, carbon_qf)
+    fluorine_ee = transform_species_recoil_spectra_to_ee(fluorine_spectra, fluorine_qf)
+
+    energy_kevee = np.unique(
+        np.concatenate((carbon_ee["energy_kevee"], fluorine_ee["energy_kevee"]))
+    )
+    spectra = {"energy_kevee": energy_kevee}
+
+    for component in ("prompt", "nue", "numubar", "delayed", "total"):
+        for suffix in ("per_s", "per_year"):
+            key = f"{component}_{suffix}"
+            spectra[key] = interpolate_spectrum(
+                energy_kevee,
+                carbon_ee["energy_kevee"],
+                carbon_ee[key],
+            ) + interpolate_spectrum(
+                energy_kevee,
+                fluorine_ee["energy_kevee"],
+                fluorine_ee[key],
+            )
+
+    spectra["c_piece_per_s"] = interpolate_spectrum(
+        energy_kevee,
+        carbon_ee["energy_kevee"],
+        carbon_ee["total_per_s"],
+    )
+    spectra["c_piece_per_year"] = interpolate_spectrum(
+        energy_kevee,
+        carbon_ee["energy_kevee"],
+        carbon_ee["total_per_year"],
+    )
+    spectra["f_piece_per_s"] = interpolate_spectrum(
+        energy_kevee,
+        fluorine_ee["energy_kevee"],
+        fluorine_ee["total_per_s"],
+    )
+    spectra["f_piece_per_year"] = interpolate_spectrum(
+        energy_kevee,
+        fluorine_ee["energy_kevee"],
+        fluorine_ee["total_per_year"],
+    )
+    spectra["cf4_f_fraction"] = np.divide(
+        spectra["f_piece_per_s"],
+        spectra["total_per_s"],
+        out=np.zeros_like(spectra["total_per_s"]),
+        where=spectra["total_per_s"] > 0.0,
+    )
+
+    if "vector_per_s" in fluorine_ee and "axial_per_s" in fluorine_ee:
+        spectra["f_vector_per_s"] = interpolate_spectrum(
+            energy_kevee,
+            fluorine_ee["energy_kevee"],
+            fluorine_ee["vector_per_s"],
+        )
+        spectra["f_vector_per_year"] = interpolate_spectrum(
+            energy_kevee,
+            fluorine_ee["energy_kevee"],
+            fluorine_ee["vector_per_year"],
+        )
+        spectra["f_axial_per_s"] = interpolate_spectrum(
+            energy_kevee,
+            fluorine_ee["energy_kevee"],
+            fluorine_ee["axial_per_s"],
+        )
+        spectra["f_axial_per_year"] = interpolate_spectrum(
+            energy_kevee,
+            fluorine_ee["energy_kevee"],
+            fluorine_ee["axial_per_year"],
+        )
+        spectra["f_axial_fraction"] = np.divide(
+            spectra["f_axial_per_s"],
+            spectra["f_piece_per_s"],
+            out=np.zeros_like(spectra["f_piece_per_s"]),
+            where=spectra["f_piece_per_s"] > 0.0,
+        )
+
+    return spectra
+
+
+def validate_nuclear_ee_spectra(
+    recoil_spectra: Dict[str, np.ndarray],
+    ee_spectra: Dict[str, np.ndarray],
+) -> None:
+    recoil_total_rate = integrate_spectrum(recoil_spectra["energy_kev"], recoil_spectra["total_per_s"])
+    ee_total_rate = integrate_spectrum(ee_spectra["energy_kevee"], ee_spectra["total_per_s"])
+
+    if not math.isfinite(ee_total_rate) or ee_total_rate < 0.0:
+        raise ValueError("The nuclear keVee spectrum produced a non-finite or negative total rate.")
+
+    if recoil_total_rate > 0.0:
+        fractional_shift = abs(ee_total_rate / recoil_total_rate - 1.0)
+        if fractional_shift > 1.0e-2:
+            raise ValueError(
+                "The nuclear keVee remapping changed the total rate by more than 1%. "
+                "Check the QF tables and the keVee interpolation."
+            )
 
 
 def build_electron_detector_spectra(
@@ -311,16 +595,10 @@ def build_electron_detector_spectra(
 
 def write_nuclear_detector_csv(
     filename: str,
-    cfg: DetectorConfig,
     spectra: Dict[str, np.ndarray],
+    thresholded_spectra: Dict[str, np.ndarray],
 ) -> None:
     energy_grid_kev = spectra["energy_kev"]
-    threshold_kev = cfg.energy_threshold_kev
-
-    total_per_s_thresholded = hard_threshold(energy_grid_kev, spectra["total_per_s"], threshold_kev)
-    total_per_year_thresholded = hard_threshold(energy_grid_kev, spectra["total_per_year"], threshold_kev)
-    prompt_per_year_thresholded = hard_threshold(energy_grid_kev, spectra["prompt_per_year"], threshold_kev)
-    delayed_per_year_thresholded = hard_threshold(energy_grid_kev, spectra["delayed_per_year"], threshold_kev)
 
     with open(filename, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -362,6 +640,81 @@ def write_nuclear_detector_csv(
                 spectra["numubar_per_s"][index],
                 spectra["delayed_per_s"][index],
                 spectra["total_per_s"][index],
+                thresholded_spectra["total_per_s"][index],
+                spectra["prompt_per_year"][index],
+                thresholded_spectra["prompt_per_year"][index],
+                spectra["delayed_per_year"][index],
+                thresholded_spectra["delayed_per_year"][index],
+                spectra["total_per_year"][index],
+                thresholded_spectra["total_per_year"][index],
+                spectra["c_piece_per_year"][index],
+                spectra["f_piece_per_year"][index],
+                spectra["cf4_f_fraction"][index],
+            ]
+
+            if include_f_split:
+                row.extend([
+                    spectra["f_vector_per_year"][index],
+                    spectra["f_axial_per_year"][index],
+                    spectra.get("f_axial_fraction", np.zeros_like(energy_grid_kev))[index],
+                ])
+
+            writer.writerow(row)
+
+
+def write_nuclear_detector_ee_csv(
+    filename: str,
+    cfg: DetectorConfig,
+    spectra: Dict[str, np.ndarray],
+) -> None:
+    energy_grid_kevee = spectra["energy_kevee"]
+    threshold_kevee = cfg.energy_threshold_kev
+
+    total_per_s_thresholded = hard_threshold(energy_grid_kevee, spectra["total_per_s"], threshold_kevee)
+    total_per_year_thresholded = hard_threshold(energy_grid_kevee, spectra["total_per_year"], threshold_kevee)
+    prompt_per_year_thresholded = hard_threshold(energy_grid_kevee, spectra["prompt_per_year"], threshold_kevee)
+    delayed_per_year_thresholded = hard_threshold(energy_grid_kevee, spectra["delayed_per_year"], threshold_kevee)
+
+    with open(filename, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+
+        header = [
+            "Eee_keVee",
+            "dR_dEee_CF4_prompt_per_s_per_keVee_detector",
+            "dR_dEee_CF4_nue_per_s_per_keVee_detector",
+            "dR_dEee_CF4_numubar_per_s_per_keVee_detector",
+            "dR_dEee_CF4_delayed_per_s_per_keVee_detector",
+            "dR_dEee_CF4_total_per_s_per_keVee_detector",
+            "dR_dEee_CF4_total_above_threshold_per_s_per_keVee_detector",
+            "dN_dEee_CF4_prompt_per_keVee_per_year_detector",
+            "dN_dEee_CF4_prompt_above_threshold_per_keVee_per_year_detector",
+            "dN_dEee_CF4_delayed_per_keVee_per_year_detector",
+            "dN_dEee_CF4_delayed_above_threshold_per_keVee_per_year_detector",
+            "dN_dEee_CF4_total_per_keVee_per_year_detector",
+            "dN_dEee_CF4_total_above_threshold_per_keVee_per_year_detector",
+            "dN_dEee_CF4_C_piece_per_keVee_per_year_detector",
+            "dN_dEee_CF4_4F_piece_per_keVee_per_year_detector",
+            "CF4_F_fraction",
+        ]
+
+        include_f_split = "f_vector_per_year" in spectra and "f_axial_per_year" in spectra
+        if include_f_split:
+            header.extend([
+                "dN_dEee_19F_vector_piece_per_keVee_per_year_detector",
+                "dN_dEee_19F_axial_piece_per_keVee_per_year_detector",
+                "F_axial_fraction",
+            ])
+
+        writer.writerow(header)
+
+        for index, energy_kevee in enumerate(energy_grid_kevee):
+            row = [
+                energy_kevee,
+                spectra["prompt_per_s"][index],
+                spectra["nue_per_s"][index],
+                spectra["numubar_per_s"][index],
+                spectra["delayed_per_s"][index],
+                spectra["total_per_s"][index],
                 total_per_s_thresholded[index],
                 spectra["prompt_per_year"][index],
                 prompt_per_year_thresholded[index],
@@ -378,7 +731,7 @@ def write_nuclear_detector_csv(
                 row.extend([
                     spectra["f_vector_per_year"][index],
                     spectra["f_axial_per_year"][index],
-                    spectra.get("f_axial_fraction", np.zeros_like(energy_grid_kev))[index],
+                    spectra.get("f_axial_fraction", np.zeros_like(energy_grid_kevee))[index],
                 ])
 
             writer.writerow(row)
@@ -438,27 +791,59 @@ def write_electron_detector_csv(
 
 def plot_nuclear_detector_rates(
     filename: str,
-    cfg: DetectorConfig,
     spectra: Dict[str, np.ndarray],
 ) -> None:
     energy_grid_kev = spectra["energy_kev"]
-    threshold_kev = cfg.energy_threshold_kev
 
     plt.figure(figsize=(8, 5))
     plt.plot(energy_grid_kev, spectra["prompt_per_year"], label=r"prompt $\nu_\mu$")
     plt.plot(energy_grid_kev, spectra["delayed_per_year"], label="delayed total")
     plt.plot(energy_grid_kev, spectra["total_per_year"], linewidth=2, label="total")
-    plt.axvline(
-        threshold_kev,
-        color="black",
-        linestyle="--",
-        alpha=0.7,
-        label=f"threshold = {threshold_kev:.2f} keV",
-    )
 
     plt.xlabel("Nuclear recoil energy [keV]")
     plt.ylabel("Expected events / (keV year)")
-    plt.title("CF4 detector CEvNS recoil spectrum")
+    plt.title("CF4 detector CEvNS recoil spectrum (raw recoil-energy view)")
+    plt.grid(True, alpha=0.3)
+    plt.yscale("log")
+
+    positive = np.concatenate((
+        spectra["prompt_per_year"],
+        spectra["delayed_per_year"],
+        spectra["total_per_year"],
+    ))
+    positive = positive[np.isfinite(positive) & (positive > 0.0)]
+    if positive.size:
+        plt.ylim(positive.min() * 0.8, positive.max() * 1.2)
+
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(filename, dpi=200)
+    plt.close()
+
+
+def plot_nuclear_detector_ee_rates(
+    filename: str,
+    cfg: DetectorConfig,
+    spectra: Dict[str, np.ndarray],
+) -> None:
+    energy_grid_kevee = spectra["energy_kevee"]
+    threshold_kevee = cfg.energy_threshold_kev
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(energy_grid_kevee, spectra["prompt_per_year"], label=r"prompt $\nu_\mu$")
+    plt.plot(energy_grid_kevee, spectra["delayed_per_year"], label="delayed total")
+    plt.plot(energy_grid_kevee, spectra["total_per_year"], linewidth=2, label="total")
+    plt.axvline(
+        threshold_kevee,
+        color="black",
+        linestyle="--",
+        alpha=0.7,
+        label=f"threshold = {threshold_kevee:.2f} keVee",
+    )
+
+    plt.xlabel("Electron-equivalent energy [keVee]")
+    plt.ylabel("Expected events / (keVee year)")
+    plt.title("CF4 detector CEvNS spectrum in measured energy")
     plt.grid(True, alpha=0.3)
     plt.yscale("log")
 
@@ -494,7 +879,7 @@ def plot_electron_detector_rates(
         color="black",
         linestyle="--",
         alpha=0.7,
-        label=f"threshold = {threshold_kev:.2f} keV",
+        label=f"threshold = {threshold_kev:.2f} keVee",
     )
 
     plt.xlabel("Electron recoil energy [keV]")
@@ -522,7 +907,7 @@ def build_nuclear_summary(
     spectra: Dict[str, np.ndarray],
     threshold_kev: float,
 ) -> dict:
-    energy_grid_kev = spectra["energy_kev"]
+    energy_grid_kev = spectra["energy_kevee"] if "energy_kevee" in spectra else spectra["energy_kev"]
 
     prompt_rate_above = integrate_above_threshold(energy_grid_kev, spectra["prompt_per_s"], threshold_kev)
     delayed_rate_above = integrate_above_threshold(energy_grid_kev, spectra["delayed_per_s"], threshold_kev)
@@ -598,10 +983,12 @@ def build_summary(
     moles_fiducial: float,
     molecules_fiducial: float,
     mass_fiducial_kg: float,
-    nuclear_spectra: Dict[str, np.ndarray],
+    nuclear_ee_spectra: Dict[str, np.ndarray],
     electron_spectra: Dict[str, np.ndarray] | None,
+    carbon_qf: QuenchingCurve,
+    fluorine_qf: QuenchingCurve,
 ) -> dict:
-    nuclear_summary = build_nuclear_summary(nuclear_spectra, cfg.energy_threshold_kev)
+    nuclear_summary = build_nuclear_summary(nuclear_ee_spectra, cfg.energy_threshold_kev)
     electron_summary = (
         build_electron_summary(electron_spectra, cfg.energy_threshold_kev)
         if electron_spectra is not None
@@ -630,6 +1017,8 @@ def build_summary(
             "pressure_label": cfg.pressure_label,
             "temperature_k": cfg.temperature_k,
             "energy_threshold_kev": cfg.energy_threshold_kev,
+            "energy_threshold_kevee": cfg.energy_threshold_kev,
+            "threshold_space": "electron_equivalent_energy",
         },
         "derived_detector": {
             "total_volume_m3": total_volume_m3,
@@ -641,6 +1030,19 @@ def build_summary(
             "cf4_molecules_fiducial": molecules_fiducial,
             "cf4_electrons_per_molecule": electrons_per_molecule,
             "electron_targets_fiducial": molecules_fiducial * electrons_per_molecule,
+        },
+        "quenching_factor": {
+            "applied_to_nuclear_recoils": True,
+            "carbon_qf_csv": os.path.relpath(DEFAULT_CARBON_QF_CSV, REPO_DIR),
+            "fluorine_qf_csv": os.path.relpath(DEFAULT_FLUORINE_QF_CSV, REPO_DIR),
+            "carbon_qf_energy_range_kev": [
+                float(carbon_qf.recoil_energy_kev[0]),
+                float(carbon_qf.recoil_energy_kev[-1]),
+            ],
+            "fluorine_qf_energy_range_kev": [
+                float(fluorine_qf.recoil_energy_kev[0]),
+                float(fluorine_qf.recoil_energy_kev[-1]),
+            ],
         },
         "nuclear_integrated_rates": nuclear_summary,
         "electron_integrated_rates": electron_summary,
@@ -666,6 +1068,7 @@ def write_summary_json(filename: str, summary: dict) -> None:
 def print_summary(summary: dict) -> None:
     cfg = summary["config"]
     det = summary["derived_detector"]
+    qf = summary.get("quenching_factor") or {}
     nuclear = summary["nuclear_integrated_rates"]
     electron = summary["electron_integrated_rates"]
     combined = summary["combined_integrated_rates"]
@@ -678,7 +1081,10 @@ def print_summary(summary: dict) -> None:
     print(f"Fiducial fraction               : {cfg['fiducial_fraction']:.6f}")
     print(f"CF4 pressure                    : {cfg['pressure_label']}")
     print(f"Gas temperature                 : {cfg['temperature_k']:.3f} K")
-    print(f"Energy threshold                : {cfg['energy_threshold_kev']:.3f} keV")
+    print(f"Measured energy threshold       : {cfg['energy_threshold_kevee']:.3f} keVee")
+    if qf:
+        print(f"Carbon QF table                 : {qf['carbon_qf_csv']}")
+        print(f"Fluorine QF table               : {qf['fluorine_qf_csv']}")
     print()
 
     print("=== Derived CF4 bookkeeping ===")
@@ -692,7 +1098,7 @@ def print_summary(summary: dict) -> None:
     print(f"Fiducial electron targets       : {det['electron_targets_fiducial']:.6e}")
     print()
 
-    print("=== Integrated CEvNS rates ===")
+    print("=== Integrated CEvNS rates (threshold in keVee) ===")
     print(f"Prompt rate above threshold     : {nuclear['prompt_rate_above_threshold_per_s']:.6e} s^-1")
     print(f"Delayed rate above threshold    : {nuclear['delayed_rate_above_threshold_per_s']:.6e} s^-1")
     print(f"Total rate above threshold      : {nuclear['total_rate_above_threshold_per_s']:.6e} s^-1")
@@ -718,7 +1124,7 @@ def print_summary(summary: dict) -> None:
         print(f"Delayed fraction above thr      : {electron['delayed_fraction_above_threshold']:.6f}")
         print()
 
-    print("=== Combined totals ===")
+    print("=== Combined totals (threshold in keVee) ===")
     print(f"All channels events/year > thr  : {combined['total_events_per_year_above_threshold']:.6e}")
     print(f"nu-e / CEvNS above threshold    : {combined['electron_over_nuclear_above_threshold']:.6f}")
 
@@ -768,6 +1174,8 @@ def main() -> None:
         REQUIRED_NUCLEAR_COLUMNS,
         OPTIONAL_NUCLEAR_COLUMNS,
     )
+    carbon_qf = load_quenching_curve(DEFAULT_CARBON_QF_CSV, "carbon")
+    fluorine_qf = load_quenching_curve(DEFAULT_FLUORINE_QF_CSV, "fluorine")
 
     electron_table = None
     if cfg.input_electron_rate_csv:
@@ -782,7 +1190,33 @@ def main() -> None:
     molecules_fiducial = moles_fiducial * AVOGADRO
     mass_fiducial_kg = moles_fiducial * CF4_MOLAR_MASS_KG_PER_MOL
 
-    nuclear_spectra = build_nuclear_detector_spectra(nuclear_table, molecules_fiducial)
+    carbon_nuclear_spectra, fluorine_nuclear_spectra = build_nuclear_species_detector_spectra(
+        nuclear_table,
+        molecules_fiducial,
+    )
+    nuclear_spectra = combine_nuclear_species_detector_spectra(
+        carbon_nuclear_spectra,
+        fluorine_nuclear_spectra,
+    )
+    thresholded_recoil_spectra = combine_nuclear_species_detector_spectra(
+        build_thresholded_recoil_species_spectra(
+            carbon_nuclear_spectra,
+            carbon_qf,
+            cfg.energy_threshold_kev,
+        ),
+        build_thresholded_recoil_species_spectra(
+            fluorine_nuclear_spectra,
+            fluorine_qf,
+            cfg.energy_threshold_kev,
+        ),
+    )
+    nuclear_ee_spectra = build_nuclear_ee_detector_spectra(
+        carbon_nuclear_spectra,
+        fluorine_nuclear_spectra,
+        carbon_qf,
+        fluorine_qf,
+    )
+    validate_nuclear_ee_spectra(nuclear_spectra, nuclear_ee_spectra)
     electron_spectra = (
         build_electron_detector_spectra(electron_table, molecules_fiducial)
         if electron_table is not None
@@ -791,12 +1225,16 @@ def main() -> None:
 
     nuclear_csv_file = os.path.join(cfg.output_dir, "cf4_detector_differential_rate.csv")
     nuclear_plot_file = os.path.join(cfg.output_dir, "cf4_detector_differential_rate.png")
+    nuclear_ee_csv_file = os.path.join(cfg.output_dir, "cf4_detector_differential_rate_ee.csv")
+    nuclear_ee_plot_file = os.path.join(cfg.output_dir, "cf4_detector_differential_rate_ee.png")
     electron_csv_file = os.path.join(cfg.output_dir, "cf4_detector_electron_differential_rate.csv")
     electron_plot_file = os.path.join(cfg.output_dir, "cf4_detector_electron_differential_rate.png")
     summary_file = os.path.join(cfg.output_dir, "cf4_detector_summary.json")
 
-    write_nuclear_detector_csv(nuclear_csv_file, cfg, nuclear_spectra)
-    plot_nuclear_detector_rates(nuclear_plot_file, cfg, nuclear_spectra)
+    write_nuclear_detector_csv(nuclear_csv_file, nuclear_spectra, thresholded_recoil_spectra)
+    plot_nuclear_detector_rates(nuclear_plot_file, nuclear_spectra)
+    write_nuclear_detector_ee_csv(nuclear_ee_csv_file, cfg, nuclear_ee_spectra)
+    plot_nuclear_detector_ee_rates(nuclear_ee_plot_file, cfg, nuclear_ee_spectra)
 
     if electron_spectra is not None:
         write_electron_detector_csv(electron_csv_file, cfg, electron_spectra)
@@ -809,8 +1247,10 @@ def main() -> None:
         moles_fiducial=moles_fiducial,
         molecules_fiducial=molecules_fiducial,
         mass_fiducial_kg=mass_fiducial_kg,
-        nuclear_spectra=nuclear_spectra,
+        nuclear_ee_spectra=nuclear_ee_spectra,
         electron_spectra=electron_spectra,
+        carbon_qf=carbon_qf,
+        fluorine_qf=fluorine_qf,
     )
     write_summary_json(summary_file, summary)
     print_summary(summary)
@@ -819,6 +1259,8 @@ def main() -> None:
     print("Saved files:")
     print(f"  {nuclear_csv_file}")
     print(f"  {nuclear_plot_file}")
+    print(f"  {nuclear_ee_csv_file}")
+    print(f"  {nuclear_ee_plot_file}")
     if electron_spectra is not None:
         print(f"  {electron_csv_file}")
         print(f"  {electron_plot_file}")

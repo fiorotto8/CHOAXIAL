@@ -9,3 +9,4 @@ compare_rate_outputs.py
 cevens_rate_comparison/
 cevens_rate_output*/
 jparc_mlf_flux_output/
+detector_threshold_scan_output/
