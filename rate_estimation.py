@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import sys
@@ -831,8 +832,42 @@ def print_summary(
         print(f"Yield fractional uncertainty    : {beam.yield_fractional_uncertainty:.3%}")
 
 
+def build_config_from_cli() -> RateConfig:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Fold the selected stopped-pion DAR flux with CF4 CEvNS and "
+            "neutrino-electron scattering kernels."
+        )
+    )
+    parser.add_argument("--source", default=RateConfig.source_model, choices=["ess", "sns", "jparc"], help="DAR source model.")
+    parser.add_argument("--distance-m", type=float, default=RateConfig.distance_m, help="Source-to-detector baseline in meters.")
+    parser.add_argument("--threshold-kev", type=float, default=RateConfig.threshold_kev, help="Threshold used only in printed integral summaries.")
+    parser.add_argument("--output-dir", default=RateConfig.output_dir, help="Optional output directory override.")
+    parser.add_argument(
+        "--fluorine-axial-model",
+        default=RateConfig.fluorine_axial_model,
+        choices=["hoferichter_19f_fast", "hoferichter_19f_central", "none", "toy"],
+        help="19F axial model used in the rate fold.",
+    )
+    parser.add_argument("--n-er", type=int, default=RateConfig.n_er, help="Number of nuclear recoil grid points.")
+    parser.add_argument("--n-te", type=int, default=RateConfig.n_te, help="Number of electron recoil grid points.")
+    parser.add_argument("--n-enu", type=int, default=RateConfig.n_enu, help="Number of delayed-neutrino energy grid points.")
+    args = parser.parse_args()
+
+    return RateConfig(
+        source_model=args.source,
+        distance_m=args.distance_m,
+        output_dir=args.output_dir,
+        threshold_kev=args.threshold_kev,
+        fluorine_axial_model=args.fluorine_axial_model,
+        n_er=args.n_er,
+        n_te=args.n_te,
+        n_enu=args.n_enu,
+    )
+
+
 def main() -> None:
-    cfg = RateConfig()
+    cfg = build_config_from_cli()
     source = get_source_model(cfg.source_model)
     beam = source.beam_factory()
     output_dir = cfg.output_dir or source.default_output_dir

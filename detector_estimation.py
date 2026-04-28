@@ -29,8 +29,8 @@ DEFAULT_INPUT_ELECTRON_RATE_CSV = os.path.join(
     "cf4_electron_differential_rate_per_molecule.csv",
 )
 DEFAULT_OUTPUT_DIR = "detector_rate_output"
-DEFAULT_CARBON_QF_CSV = os.path.join(REPO_DIR, "QF", "C_in_CF4.csv")
-DEFAULT_FLUORINE_QF_CSV = os.path.join(REPO_DIR, "QF", "F_in_CF4.csv")
+DEFAULT_CARBON_QF_CSV = os.path.join(REPO_DIR, "data", "quenching", "C_in_CF4.csv")
+DEFAULT_FLUORINE_QF_CSV = os.path.join(REPO_DIR, "data", "quenching", "F_in_CF4.csv")
 
 REQUIRED_NUCLEAR_COLUMNS = (
     "Er_keV",

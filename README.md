@@ -1,653 +1,798 @@
-# CHOAXIAL
+# COHAXIAL
 
-CHOAXIAL is a compact Python toolkit for first-pass neutrino-scattering
-feasibility studies with light nuclei and gas targets. In its current form the
-repository is centered on $CF_4$, with built-in Standard-Model calculations for
-coherent elastic neutrino-nucleus scattering (CEvNS) on $^{12}C$ and $^{19}F$,
-neutrino-electron elastic scattering on the `42` electrons in a $CF_4$ molecule,
-stopped-pion decay-at-rest (DAR) source models, and a simple detector-scaling
-layer.
+COHAXIAL is a practical research sandbox for first-pass neutrino-scattering
+rate estimates in light gas targets.  The current workflow is centered on
+CF4 and supports:
 
-The code is meant for a preliminary physics evaluation, not for a final
-experiment design report. A good way to think about it is: can this source,
-target, and detector concept produce rates in the right ballpark to justify a
-stronger ERC Starting Grant proposal? The repository helps answer that question
-quickly by making the source assumptions, cross-section ingredients, target
-composition, and detector normalization explicit and easy to inspect.
+- Standard-Model coherent elastic neutrino-nucleus scattering (CEvNS) on
+  `12C` and `19F`;
+- Standard-Model neutrino-electron elastic scattering on the 42 electrons in a
+  CF4 molecule;
+- stopped-pion decay-at-rest (DAR) source benchmarks for ESS, SNS FTS, and
+  J-PARC MLF-like configurations;
+- flux-folded recoil spectra per CF4 molecule;
+- ideal-gas detector scaling, quenching-factor remapping to keVee, and simple
+  threshold scans.
+
+This repository is not a polished public package or a final detector design
+calculation.  It is a daily-use, work-in-progress research repository intended
+to keep the source assumptions, target composition, cross-section ingredients,
+and detector normalization inspectable while exploring whether a source/target
+concept is in the right rate regime.
 
 ## Quick Start
 
-Install the minimal dependencies:
+From WSL, use the repository root:
 
 ```bash
-pip install numpy matplotlib
+cd /mnt/c/Users/david/MyDrive/WORK/COHAXIAL
+python3 -m pip install -r requirements.txt
 ```
 
-Typical workflow:
+Run the lightweight sanity checks:
 
 ```bash
-# 1. Inspect a single CEvNS differential cross section
-python cevens.py --target 19F --enu-mev 30 --er-kev 5 --json
-
-# 2. Generate an ESS-, SNS-, or J-PARC-like DAR flux benchmark
-python ESS_flux.py
-
-# 3. Fold the flux with the interaction model to get CF4 rates per molecule
-python rate_estimation.py
-
-# 4. Convert molecule-normalized rates into detector-level spectra and yearly counts
-python detector_estimation.py --config configs/detector_config.json
+python3 scripts/sanity_check.py
 ```
 
-Alternative source benchmarks:
+Run a single CEvNS point:
 
 ```bash
-python SNS_flux.py
-python JPARK_flux.py
+python3 cevens.py --target 19F --enu-mev 30 --er-kev 5 --json
 ```
 
-These produce standalone SNS and J-PARC MLF flux benchmarks. In
-`rate_estimation.py`, the flux source used in the rate fold is selected through
-`source_model` in `RateConfig`, with built-in options `"ess"`, `"sns"`, and
-`"jparc"`.
+Generate a source benchmark:
 
-## What The Repository Does
+```bash
+python3 ESS_flux.py
+python3 SNS_flux.py
+python3 JPARK_flux.py
+```
 
-At the moment the codebase provides four main layers:
+Fold a source flux with the CF4 interaction model:
 
-1. `cevens.py`
-   Interaction kernels for CEvNS and neutrino-electron scattering, including
-   vector and axial pieces and basic $CF_4$ bookkeeping.
-2. `ESS_flux.py`, `SNS_flux.py`, and `JPARK_flux.py`
-   DAR source models for ESS-, SNS-, and J-PARC MLF-like benchmarks, with CSV
-   and plot export.
-3. `rate_estimation.py`
-   Flux-folded nuclear and electron recoil spectra per $CF_4$ molecule.
-4. `detector_estimation.py`
-   Detector-normalized rates for a cylindrical ideal-gas $CF_4$ target specified
-   through JSON.
+```bash
+python3 rate_estimation.py --source ess
+```
 
-What it is good for:
+Useful alternatives:
 
-- checking order-of-magnitude event rates
-- comparing prompt and delayed source components
-- separating $^{12}C$ and $^{19}F$ contributions inside $CF_4$
-- estimating how relevant the built-in $^{19}F$ axial term is
-- seeing how pressure, fiducial fraction, threshold, and geometry affect yearly
-  yields
+```bash
+python3 rate_estimation.py --source sns --fluorine-axial-model hoferichter_19f_fast
+python3 rate_estimation.py --source jparc --distance-m 24 --output-dir cevens_rate_output_jparc
+```
 
-What it does not yet do:
+`rate_estimation.py` currently defaults to `hoferichter_19f_central`; use
+`hoferichter_19f_fast` for the leading transverse-response model without the
+central HMS correction.
 
-- detector response, smearing, or efficiency modeling beyond a hard threshold
-- beam timing cuts or pulse-window optimization
-- background modeling
-- uncertainty propagation
-- automated parameter scans
-- higher-order and two-body axial corrections for $^{19}F$
+Scale molecule-normalized rates to the example detector:
 
-## Workflow In One View
+```bash
+python3 detector_estimation.py --config configs/detector_config.json
+```
 
-$\text{source model} \to \phi(E_\nu) \to \text{fold with } \frac{d\sigma}{dE} \to \text{rate per CF}_4\text{ molecule} \to \text{detector-scaled yearly spectrum}$
+Scan measured-energy thresholds in keVee:
 
-The implementation follows exactly this chain:
+```bash
+python3 scan_detector_threshold.py
+```
 
-- `cevens.py` computes $\frac{d\sigma}{dE_r}$ and $\frac{d\sigma}{dT_e}$
+Expected outputs are CSV and PNG products in ignored generated-output folders
+such as `ess_flux_output/`, `sns_flux_output/`, `jparc_mlf_flux_output/`,
+`cevens_rate_output/`, `detector_rate_output/`, and
+`detector_threshold_scan_output/`.
 
-- `ESS_flux.py`, `SNS_flux.py`, or `JPARK_flux.py` provides the DAR flux model
-- `rate_estimation.py` computes $\frac{dR}{dE}$ per $CF_4$ molecule
-- `detector_estimation.py` multiplies by the number of fiducial molecules and by
-  live time
-
-## Repository Structure
+## Repository Layout
 
 ```text
 .
-├── cevens.py
-├── ESS_flux.py
-├── SNS_flux.py
-├── JPARK_flux.py
-├── rate_estimation.py
-├── detector_estimation.py
-├── scan_detector_threshold.py
+├── cevens.py                     # CEvNS and nu-e interaction kernels
+├── ESS_flux.py                   # ESS DAR source entry point
+├── SNS_flux.py                   # SNS FTS DAR source entry point
+├── JPARK_flux.py                 # J-PARC MLF DAR source entry point
+├── rate_estimation.py            # flux-folded CF4 spectra per molecule
+├── detector_estimation.py        # detector scaling and quenching remap
+├── scan_detector_threshold.py    # repeated detector threshold scan
+├── cohaxial/
+│   └── dar_flux.py               # shared stopped-pion DAR flux helpers
 ├── configs/
-│   └── detector_config.json
+│   └── detector_config.json      # example cylindrical CF4 detector config
+├── data/
+│   └── quenching/
+│       ├── C_in_CF4.csv          # carbon QF table in CF4
+│       └── F_in_CF4.csv          # fluorine QF table in CF4
+├── examples/
+│   └── quick_point_check.py      # tiny point-calculation example
+├── scripts/
+│   └── sanity_check.py           # no-pytest validation smoke test
 ├── GMO_exam/
-│   └── simple_estimates.ipynb
-├── ess_flux_output/             # autogenerated
-├── jparc_mlf_flux_output/       # autogenerated
-├── cevens_rate_output/          # autogenerated
-├── detector_rate_output/        # autogenerated
-└── README.md
+│   └── simple_estimates.ipynb    # exploratory notebook, outside main chain
+├── Paper/                        # optional local references, ignored by git
+└── requirements.txt
 ```
 
-Module-by-module summary:
+The root Python files are intentionally kept as user-facing scripts because
+that is the established working style of this repository.  The only package-like
+folder is `cohaxial/`, which currently holds shared code that would otherwise be
+duplicated across the three source scripts.
 
-- `cevens.py`
-  Core physics module. Defines nuclear targets, form factors, axial models, the
-  CEvNS calculator, the neutrino-electron calculator, and a small CLI for
-  single-point cross-section checks.
-- `ESS_flux.py`
-  ESS-like DAR source benchmark. Writes point-grid and binned flux CSV/PNG
-  outputs in `ess_flux_output/`.
-- `SNS_flux.py`
-  SNS FTS DAR source benchmark. Writes average-flux and per-POT fluence outputs
-  in `sns_flux_output/`.
-- `JPARK_flux.py`
-  J-PARC MLF flux benchmark. Writes average-flux and per-POT fluence outputs in
-  `jparc_mlf_flux_output/`.
-- `rate_estimation.py`
-  Builds $^{12}C$, $^{19}F$, and $CF_4$ electron targets, folds the selected
-  ESS/SNS/J-PARC-like average flux with the interaction kernels, and writes
-  per-molecule recoil spectra and summary plots to a source-specific
-  `cevens_rate_output*` folder.
-- `detector_estimation.py`
-  Reads the rate CSVs, parses the detector JSON, computes fiducial $CF_4$
-  inventory, applies the built-in $^{12}C$/$^{19}F$ quenching-factor mapping,
-  writes detector-level recoil and $keVee$ spectra, and exports a compact
-  summary JSON.
-- `scan_detector_threshold.py`
-  Threshold-scan driver that reruns `detector_estimation.py` for multiple
-  measured-threshold values in $keVee$ and writes CSV/plot outputs for
-  prompt-delayed-total yields, carbon-vs-fluorine composition, and fluorine
-  vector-vs-axial contributions.
-- `configs/detector_config.json`
-  Example detector benchmark with cylindrical geometry, fiducial fraction, gas
-  pressure, temperature, and threshold.
-- `GMO_exam/simple_estimates.ipynb`
-  Exploratory notebook outside the main scripted pipeline.
+Generated products are ignored by git.  The quenching-factor CSVs under
+`data/quenching/` are input data and are intentionally unignored.
 
-## How To Use The Code
+## Workflow Overview
 
-### Single-point interaction checks
+The main analysis chain is:
 
-Use `cevens.py` when you want to inspect a specific CEvNS differential cross
-section value before running the full chain:
-
-```bash
-python cevens.py --target 19F --enu-mev 30 --er-kev 5
-python cevens.py --target 19F --enu-mev 30 --er-kev 5 --json
-python cevens.py --target 19F --enu-mev 30 --er-kev 5 --axial-model none
-python cevens.py --target 19F --enu-mev 30 --er-kev 5 --axial-model toy
-python cevens.py --target 12C --enu-mev 30 --er-kev 5 --pointlike
+```text
+DAR source metadata
+  -> phi(E_nu)
+  -> fold with d sigma / dE
+  -> rate per CF4 molecule
+  -> ideal-gas detector scaling
+  -> quenching remap and threshold integration
 ```
 
-This is the quickest way to check kinematics, weak charge, form-factor value,
-and the relative size of vector and axial pieces.
+1. `ESS_flux.py`, `SNS_flux.py`, or `JPARK_flux.py` defines a beam metadata
+   object and exposes a common stopped-pion DAR flux API.  The duplicated flux
+   logic lives in `cohaxial/dar_flux.py`.
+2. `cevens.py` defines the nuclear targets, form factors, CEvNS calculator, and
+   neutrino-electron calculator.
+3. `rate_estimation.py` chooses one DAR source, builds `12C`, `19F`, and CF4
+   electron targets, then integrates flux times cross section over neutrino
+   energy.  Outputs are rates per molecule, not detector counts.
+4. `detector_estimation.py` reads the per-molecule CSVs, parses a detector JSON,
+   computes the fiducial CF4 inventory with the ideal gas law, applies C/F
+   quenching-factor maps to the nuclear spectra, and writes detector-level
+   spectra plus a compact summary JSON.
+5. `scan_detector_threshold.py` reruns `detector_estimation.py` over a grid of
+   measured-energy thresholds and summarizes prompt/delayed, carbon/fluorine,
+   and fluorine vector/axial contributions.
 
-### Source benchmarks
+## Physics And Mathematical Model
 
-Run:
+### Units
 
-```bash
-python ESS_flux.py
-python SNS_flux.py
-python JPARK_flux.py
+The code uses practical phenomenology units:
+
+- neutrino energy `E_nu`: MeV;
+- nuclear recoil energy `E_r`: keV;
+- electron recoil energy `T_e`: keV;
+- measured nuclear energy `E_ee`: keVee;
+- nuclear and electron masses: GeV internally;
+- CEvNS and neutrino-electron differential cross sections:
+  cm^2 / keV;
+- delayed flux: neutrinos / (cm^2 s MeV);
+- prompt line flux: neutrinos / (cm^2 s);
+- delayed per-POT fluence: neutrinos / (cm^2 POT MeV);
+- molecule-normalized rates: s^-1 keV^-1 molecule^-1;
+- detector spectra: events / (keV year) or events / (keVee year).
+
+### Source Of Physics Inputs
+
+The local `Paper/` folder was used to trace the current mathematical
+implementation.  The active formulas are drawn mainly from:
+
+- `Paper/AccoppiamentoAssiale_Paper_2603.05281v1 (1).pdf`, a 2026 axial-vector
+  CEvNS sensitivity study that motivates fluorine-based targets and uses an
+  ESS-like DAR normalization;
+- `Paper/CrossSections/HMS_axialFitparams.pdf`, Hoferichter, Menendez, and
+  Schwenk, PRD 102 (2020), for the CEvNS vector/axial split, `19F`
+  shell-model axial response coefficients, hadronic constants, and two-body
+  current correction conventions;
+- `Paper/CrossSections/HELM_vectorModel.pdf`, Helm, Phys. Rev. 104 (1956), for
+  the folded-density idea behind the Helm form factor.
+
+The local `Klein-Nystrand_vectorModel.pdf` and `AXialAprox_*.pdf` files are
+useful background references, but their formulas are not the active default
+implementation.  Klein-Nystrand is an alternative vector form-factor reference
+mentioned by the axial-vector paper.  The `AXialAprox_*` PDFs describe older
+dark-matter spin-dependent form-factor conventions, not the CEvNS `19F`
+response used by the default workflow.
+
+Important numerical constants and where they enter:
+
+| Quantity | Code value | Where used | Provenance / reason |
+| --- | ---: | --- | --- |
+| `G_F` | `1.1663787e-5 GeV^-2` | all weak cross sections | Standard PDG value used as a fixed SM input |
+| `sin^2(theta_W)` | `0.23857` | weak charge and nu-e couplings | Low-energy weak-mixing input; the axial paper also states that PDG electroweak values are used |
+| `amu` | `0.93149410242 GeV` | nuclear masses | CODATA-style conversion; masses are approximate `A * amu` in this sandbox |
+| `m_e` | `0.510998950 MeV` | nu-e scattering | PDG electron mass |
+| `m_pi+` | `139.57039 MeV` | DAR prompt line | PDG charged-pion mass |
+| `m_mu+` | `105.6583755 MeV` | DAR endpoint and Michel spectra | PDG muon mass |
+| `g_A` | `1.27641` | HMS `19F` axial response | HMS Table I |
+| `g_A^{s,N}` | `0` fast, `-0.085` central | strange axial contribution | Fast model omits strangeness by design; central value from HMS Table I |
+| `<r_A^2>` | `0.46 fm^2` | central axial `delta_0` | HMS Table I |
+| `rho` | `0.10 fm^-3` | central two-body correction | midpoint of the HMS Table V range `0.09...0.11 fm^-3` |
+| `c_1,c_3,c_4,c_6` | `-1.20,-4.45,2.96,5.01 GeV^-1` | central two-body correction | HMS Table V central values |
+| `c_D` | `(-6.08 + 0.30)/2 = -2.89` | central two-body correction | midpoint of the HMS Table V allowed range; this is a pragmatic single-value choice, not an uncertainty scan |
+| `F_pi` | `0.09228 GeV` | central two-body correction | HMS convention |
+| `g_piNN` | `sqrt(4 pi 13.7)` | central two-body correction | HMS/Klos convention used by the implementation comments |
+
+### CEvNS
+
+`cevens.py` implements a vector plus pure-axial CEvNS split:
+
+```math
+\frac{d\sigma}{dE_r}
+= \frac{G_F^2 m_N}{4\pi}
+\left[
+\left(1-\frac{m_N E_r}{2E_\nu^2}-\frac{E_r}{E_\nu}\right)
+Q_W^2 |F_W(q^2)|^2
++
+\left(1+\frac{m_N E_r}{2E_\nu^2}-\frac{E_r}{E_\nu}\right)
+F_A(q^2)
+\right],
 ```
-
-Use any of these as standalone benchmark generators. For the end-to-end rate
-chain, choose the source in `RateConfig` inside `rate_estimation.py`, for
-example `source_model = "sns"` or `source_model = "jparc"`.
-
-### Molecule-normalized rates
-
-Run:
-
-```bash
-python rate_estimation.py
-```
-
-This produces:
-
-- CEvNS differential rates per $CF_4$ molecule
-- neutrino-electron differential rates per electron and per $CF_4$ molecule
-- separate prompt, delayed, and total components
-- decomposition into $^{12}C$ and $^{19}F$
-- vector and axial separation for $^{19}F$
-
-Important normalization:
-
-- outputs are rates per molecule, not per detector
-- the source used in the fold is selected by `source_model` in `RateConfig`
-  inside `rate_estimation.py`
-
-If you want to change the main processing defaults in code, the first place to
-edit is `RateConfig` inside `rate_estimation.py`. The most useful settings are:
-
-- `source_model: str = "ess"`
-  selects the flux benchmark used in the fold; supported options are `"ess"`,
-  `"sns"`, and `"jparc"`
-- `distance_m: float = 20.0`
-  source-to-detector baseline used in the rate fold
-- `fluorine_axial_model: str = "hoferichter_19f_central"`
-  selects the built-in $^{19}F$ axial model for the rate scan
-- `n_er: int = 1201`
-  number of nuclear-recoil bins
-- `n_te: int = 3001`
-  number of electron-recoil bins
-- `n_enu: int = 3000`
-  number of delayed neutrino-energy bins
-- `threshold_kev: float = 0.0`
-  threshold used in the integrated-above-threshold summaries
-- `output_dir: Optional[str] = None`
-  lets you override the default source-specific output folder
-
-For one-point CEvNS checks in `cevens.py`, the default single-call axial choice
-for $^{19}F$ is the CLI setting
-
-- `--axial-model` with default `hoferichter_19f_fast`
-
-while the batch rate workflow uses the `fluorine_axial_model` default in
-`rate_estimation.py`.
-
-### Detector-level spectra
-
-Run:
-
-```bash
-python detector_estimation.py --config configs/detector_config.json
-```
-
-The detector config currently supports:
-
-- `radius_m` or `diameter_m`
-- `length_m` or `height_m`
-- `fiducial_fraction`
-- one gas-pressure field among `pressure_pa`, `pressure_kpa`, `pressure_mbar`,
-  `pressure_bar`, `pressure_torr`, or `pressure_atm`
-- `temperature_K`
-- `analysis.energy_threshold_kev`
-
-For nuclear recoils, `detector_estimation.py` now also applies the tabulated
-quenching factors in `QF/C_in_CF4.csv` and `QF/F_in_CF4.csv` to build a
-measured-energy spectrum in electron-equivalent energy, $E_{ee}$.
-
-The quenching factor is evaluated with piecewise-linear interpolation between
-the tabulated points. Below the minimum tabulated recoil energy the first
-tabulated QF value is held fixed, and above the maximum tabulated recoil energy
-the last tabulated QF value is held fixed.
-
-The code therefore keeps two nuclear views:
-
-- a raw recoil-energy spectrum in $E_r$
-- a quenching-corrected measured-energy spectrum in $E_{ee}$, written in $keVee$
-
-The detector threshold for nuclear recoils is applied in the measured-energy
-system. For backward compatibility the config key is still
-`analysis.energy_threshold_kev`, but in the detector workflow it should now be
-interpreted as a threshold in $keVee$.
-
-For a fixed detector configuration with only the threshold varied, use:
-
-```bash
-python scan_detector_threshold.py
-```
-
-This reruns `detector_estimation.py` over a threshold grid, then writes:
-
-- a main threshold scan for prompt, delayed, and total expected events per year
-  above threshold
-- a nuclear-composition scan for carbon and fluorine contributions
-- a fluorine split scan for total, vector, and axial pieces
-
-Each plot includes a lower panel with the dominant fraction only, and
-`--log-y` can be used to switch the y-axis of the event-count and fraction
-panels to logarithmic scale.
-
-The script writes detector-level nuclear recoil outputs in both $E_r$ and
-$E_{ee}$, plus the electron recoil outputs and a summary JSON with integrated
-rates above threshold. The threshold scan uses the measured-energy threshold in
-$keVee$.
-
-## Output Files
-
-The most relevant autogenerated products are:
-
-- `ess_flux_output/`
-  ESS-like point-grid and binned flux tables and plots
-- `sns_flux_output/`
-  SNS average-flux and per-POT fluence tables and plots
-- `jparc_mlf_flux_output/`
-  J-PARC average-flux and per-POT fluence tables and plots
-- `cevens_rate_output/cf4_differential_rate_per_molecule.csv`
-  CEvNS spectra per molecule, including the $^{12}C$/$^{19}F$ decomposition
-- `cevens_rate_output/cf4_electron_differential_rate_per_molecule.csv`
-  neutrino-electron recoil spectra per electron and per molecule
-- `cevens_rate_output_sns/` and `cevens_rate_output_jparc/`
-  source-specific rate outputs when `source_model` is set to `sns` or `jparc`
-- `detector_rate_output/cf4_detector_summary.json`
-  compact detector-level summary for proposal notes and quick comparisons
-- `detector_rate_output/cf4_detector_differential_rate_ee.csv` and
-  `detector_rate_output/cf4_detector_differential_rate_ee.png`
-  quenching-corrected nuclear detector spectra in measured energy $E_{ee}$
-- `detector_threshold_scan_output/`
-  threshold-scan CSV and plot set from `scan_detector_threshold.py`, including
-  the main prompt-delayed-total scan, the carbon-vs-fluorine nuclear
-  composition scan, and the fluorine vector-vs-axial split scan, all scanned in
-  threshold $keVee$
-
-## Units And Conventions
-
-The code uses practical phenomenology units throughout:
-
-- neutrino energy: $\mathrm{MeV}$
-
-- nuclear recoil energy: $\mathrm{keV}$
-
-- electron recoil energy: $\mathrm{keV}$
-
-- electron-equivalent measured energy: $\mathrm{keVee}$
-
-- nuclear masses: $\mathrm{GeV}$ internally
-
-- CEvNS differential cross section: $\mathrm{cm}^2/\mathrm{keV}$
-
-- delayed flux: $\mathrm{neutrinos}/(\mathrm{cm}^2\,\mathrm{s}\,\mathrm{MeV})$
-
-- prompt line flux: $\mathrm{neutrinos}/(\mathrm{cm}^2\,\mathrm{s})$
-
-- molecule-normalized rates: $\mathrm{s}^{-1}\,\mathrm{keV}^{-1}\,\mathrm{molecule}^{-1}$
-
-- detector-level spectra: $\mathrm{events}/(\mathrm{keV}\,\mathrm{year})$ or
-  $\mathrm{events}/(\mathrm{keVee}\,\mathrm{year})$ depending on the exported
-  spectrum
-
-## Physics Model
-
-### 1. CEvNS kernel
-
-The CEvNS differential cross section in `cevens.py` is implemented as a vector
-piece plus a pure axial piece [Sierra, candela 2026](https://arxiv.org/pdf/2603.05281):
-
-$$\frac{d\sigma}{dE_r} = \frac{G_F^2 m_N}{4\pi} \left[ \left(1 - \frac{m_N E_r}{2E_\nu^2} - \frac{E_r}{E_\nu}\right) Q_W^2 |F_W(q^2)|^2 + \left(1 + \frac{m_N E_r}{2E_\nu^2} - \frac{E_r}{E_\nu}\right) F_A(q^2) \right]$$
 
 with
 
-$$q^2 = 2 m_N E_r$$
-$$Q_W = Z(1 - 4\sin^2\theta_W) - N$$
+```math
+q^2 = 2m_N E_r,
+\qquad
+Q_W = Z(1 - 4\sin^2\theta_W) - N.
+```
 
-Key implementation choices:
+Implementation notes:
 
-- $^{12}C$ is treated as spin zero, so the axial term is set to zero.
-- $^{19}F$ is the only nucleus with a built-in axial contribution.
-- the code keeps total, vector-only, and axial-only differential cross sections separate
+- `12C` is treated as spin zero, so `F_A = 0`.
+- `19F` is the only built-in target with nonzero axial options.
+- The calculator keeps total, vector-only, and axial-only components separate.
+- Cross sections are clipped at zero after kinematic checks to avoid tiny
+  negative numerical artifacts at endpoints.
+- Vector-axial interference terms are not included.  The axial-vector paper
+  notes that these terms vanish or are recoil-suppressed for the intended
+  CEvNS use case, so the sandbox follows the independent vector plus pure-axial
+  decomposition.
+- Nuclear masses are simple `A * amu` approximations.  This is adequate for
+  first-pass rate comparisons but should be replaced by isotope masses for a
+  precision calculation.
 
-#### Vector form factor
+### Vector Form Factor
 
-The vector form factor has two built-in options in `cevens.py`:
+The default weak vector form factor is the Helm form:
 
-  **Helm (default):**
+```math
+F_W(q) =
+3\frac{j_1(qR_n)}{qR_n}
+\exp\left[-\frac{(qs)^2}{2}\right],
+```
 
-  $$F_W(q) = 3\,\frac{j_1(qR_n)}{qR_n}\,\exp\left[-\frac{(qs)^2}{2}\right]$$
+where
 
-  This is the standard Helm analytic form-factor parametrization introduced in [Helm 1956](https://link.aps.org/doi/10.1103/PhysRev.104.1466).
+```math
+R_n^2 = c^2 + \frac{7}{3}\pi^2 a^2 - 5s^2,
+```
 
-  with
+and the implemented defaults are:
 
-  $$R_n^2 = c^2 + \frac{7}{3}\pi^2 a^2 - 5s^2$$
+```math
+c = 1.23 A^{1/3} - 0.60\ \mathrm{fm},\quad
+a = 0.52\ \mathrm{fm},\quad
+s = 0.90\ \mathrm{fm}.
+```
 
-  and default parameters
+`--pointlike` in `cevens.py` uses `F_W = 1` instead.
 
-  $$c = 1.23\,A^{1/3} - 0.60\,\text{fm},\quad a = 0.52\,\text{fm},\quad s = 0.90\,\text{fm}$$
+The Helm choice is used because it is the standard compact phenomenological
+weak-charge form factor in the local axial CEvNS paper and in much CEvNS
+rate-estimate work.  The `Paper/` folder also contains a Klein-Nystrand vector
+form-factor reference, but no Klein-Nystrand implementation currently exists in
+the code.
 
-  These default values follow the standard phenomenological choice widely used in recoil calculations. The charge-density systematics underlying the usual $c,\ a,\ s$ parameters are associated with [Friedrich & Vögler 1982](https://inspirehep.net/literature/1448782), while their practical use in recoil phenomenology was popularized by [Lewin & Smith 1996](https://www.sciencedirect.com/science/article/pii/S0927650596000473). The same Helm parametrization is also standard in CEvNS phenomenology; for example, it is used explicitly in [Chatterjee et al. 2023](https://link.aps.org/doi/10.1103/PhysRevD.107.055019).
+### 19F Axial Response
 
-  Unless the parameter $c$ is user-specified, the code uses the default values above. In the implementation, for $q^2 \le 0$ the code returns $F_W = 1$
+The generic axial form-factor decomposition is:
 
-  **Point-like (`--pointlike`):**
+```math
+F_A(q^2) =
+\frac{8\pi}{2J+1}
+\left[
+(g_A^s)^2 S_{00}(q^2)
+- g_A g_A^s S_{01}(q^2)
++ g_A^2 S_{11}(q^2)
+\right].
+```
 
-  $F_W(q^2) = 1$ for all $q^2$ (unity form factor).
+For `19F`, the built-in Hoferichter-Menendez-Schwenk options use the transverse
+shell-model polynomial responses:
 
-#### Axial form factor
+```math
+F(u) = e^{-u/2}\sum_i c_i u^i,
+\qquad
+u = \frac{q^2 b^2}{2},
+\qquad
+b = 1.7623\ \mathrm{fm}.
+```
 
-The generic axial structure is written as
+Here `q` in `u` is evaluated in `fm^-1`; the code converts from `q` in GeV
+using `1 fm = 5.067730716 GeV^-1`.
 
-$$F_A(q^2) = \frac{8\pi}{2J+1} \left[ (g_A^s)^2 S_{00}(q^2) - g_A g_A^s S_{01}(q^2) + g_A^2 S_{11}(q^2) \right]$$
+The CEvNS axial term uses the transverse spin response `S^T_ij`.  In the HMS
+notation this corresponds to the `Sigma-prime` response coefficients.  The
+`Sigma-double-prime` longitudinal coefficients are present in HMS Table VIII and
+are kept visible in `cevens.py` for future extensions, but they are not summed
+into the CEvNS `F_A` used by the current workflow.
 
-For $^{19}F$, two Hoferichter-Menéndez-Schwenk axial levels are available:
-[arXiv:2007.08529](https://arxiv.org/abs/2007.08529).
+For `19F`, HMS Table VIII gives only the `L=1` multipole for the active
+CEvNS transverse response.  The code evaluates:
 
-Both use the Appendix E / Table VIII $^{19}F$ shell-model polynomial-fit
-responses for the proton and neutron $L = 1$ transverse operators
-$F^{\Sigma_0}$ and $F^{\Sigma_{00}}$:
+```math
+F_{\Sigma',+} = F_{\Sigma'}^p + F_{\Sigma'}^n,
+\qquad
+F_{\Sigma',-} = F_{\Sigma'}^p - F_{\Sigma'}^n,
+```
 
-$$F(u) = \exp(-u/2)\sum_i c_i u^i,\qquad u = \frac{q^2 b^2}{2},\qquad b = 1.7623\,\text{fm}$$
+and then:
 
-- **Fast**: `axial_model="hoferichter_19f_fast"` uses the polynomial-fit
-  transverse shell-model response with $g_A = 1.27641$, $g_A^{s,N} = 0$, and
-  $\delta_0(q^2)=\delta_{00}(q^2)=0$. This is intended for fast feasibility
-  scans.
-- **Central detailed [Default]**: `axial_model="hoferichter_19f_central"` uses the same
-  response basis, $g_A^{s,N}=-0.085$, and one central prescription for the
-  Eq. (86) correction functions $\delta_0(q^2)$ and $\delta_{00}(q^2)$ using
-  Table I and Table V inputs.
+```math
+S_{00}^T = F_{\Sigma',+}^2,
+\qquad
+S_{11}^T = \left[(1+\delta_0)F_{\Sigma',-}\right]^2,
+\qquad
+S_{01}^T = 2(1+\delta_0)F_{\Sigma',+}F_{\Sigma',-}.
+```
 
-Both levels form $S_{00}^T$, $S_{01}^T$, and $S_{11}^T$ following
-Eqs. (80)-(85), then feed them into $F_A(q^2)$ above. Neither level is an
-uncertainty-band treatment; scans over $\rho$, $c_D$, and related nuclear
-inputs are a later step.
+The active `19F` coefficients are:
 
-The old dipole-like spin-expectation suppression is no longer the default,
-because it is not directly supported as a standard $^{19}F$ CEvNS nuclear-response
-model. A toy/testing axial model remains available for debugging and
-benchmarking, but it is not proposal-grade physics.
+| Response | `c_0` | `c_1` | `c_2` |
+| --- | ---: | ---: | ---: |
+| `F_{Sigma'}^p` | `0.269513` | `-0.18098` | `0.0296873` |
+| `F_{Sigma'}^n` | `-0.00113172` | `0.00038188` | `0.000744991` |
 
-In the current scripts, the default $^{19}F$ axial model is
-`hoferichter_19f_fast`. To change it:
+At `q^2 = 0`, the fast model gives `F_A(0) ~= 1.50`, consistent with the HMS
+Table IV spin expectation values for `19F`, `<S_p> = 0.478` and
+`<S_n> = -0.002`, through the HMS zero-momentum normalization:
 
-- for one-point checks, pass `--axial-model hoferichter_19f_central`, `none`, or
-  `toy` to `python cevens.py ...`
-- for the full $CF_4$ rate scan, edit `fluorine_axial_model` in
-  `RateConfig` inside `rate_estimation.py`
-- in Python code, call `fluorine19_target(axial_model="hoferichter_19f_central")`
-  or another supported option
+```math
+F_A(0) =
+\frac{4}{3}g_A^2\frac{J+1}{J}
+\left(\langle S_p\rangle-\langle S_n\rangle\right)^2
+```
 
-### 2. Neutrino-electron scattering
+for `J = 1/2` when strangeness and two-body corrections are omitted.
 
-`cevens.py` also includes the Standard-Model free-electron elastic-scattering kernel for electron recoils. In the low-energy limit used here, the differential cross section is written as
+Available options:
 
-$$ \frac{d\sigma}{dT_e} = \frac{2 G_F^2 m_e}{\pi} \left[ g_{\mathrm{lead}}^2 + g_{\mathrm{sub}}^2 (1-y)^2 - \frac{g_L g_R m_e T_e}{E_\nu^2} \right], $$
+- `hoferichter_19f_fast`: Table VIII transverse response polynomials,
+  `g_A = 1.27641`, `g_A^{s,N} = 0`, and
+  `delta_0 = 0`.
+- `hoferichter_19f_central`: same response basis, `g_A^{s,N} = -0.085`,
+  and one central HMS Eq. (86) `delta_0(q^2)` prescription using the constants
+  present in `cevens.py`.
+- `none`: disables the axial term.
+- `toy`: legacy/debug spin-expectation model with a simple falloff.  It is not
+  a proposal-grade nuclear-response model.
 
-for neutrinos, with
+The full uncertainty band from nuclear inputs is not implemented.
 
-$$
+Decision logic for the two HMS options:
+
+- The fast option matches the leading-response spirit of the local axial-vector
+  CEvNS study: shell-model `19F` transverse coefficients, no subleading
+  two-body-current correction, and no strange axial term.  It is useful for
+  rapid scans and comparisons with the first-pass analytic estimates.
+- The central option is a single exploratory HMS central-value correction.  It
+  applies the axial-radius and two-body-current `delta_0` correction with HMS
+  Table I/V central inputs.  The HMS uncertainty band depends on ranges in
+  `rho`, `c_D`, and other nuclear-current assumptions; that band is not yet
+  propagated.
+- The toy option keeps the older `<S_p>, <S_n>` interface for debugging.  Its
+  defaults, `<S_p>=0.475`, `<S_n>=0`, and `Lambda_A=0.35 GeV`, should not be
+  used as a reference CEvNS model without separate validation.  They are kept
+  only because they are convenient for checking vector/axial plumbing.
+
+### Neutrino-Electron Scattering
+
+The free-electron elastic-scattering kernel is:
+
+```math
+\frac{d\sigma}{dT_e}
+=
+\frac{2G_F^2 m_e}{\pi}
+\left[
+g_\mathrm{lead}^2
++ g_\mathrm{sub}^2(1-y)^2
+- \frac{g_L g_R m_e T_e}{E_\nu^2}
+\right],
+\qquad
 y = \frac{T_e}{E_\nu}.
-$$
+```
 
-For antineutrinos, the same expression is used with the standard interchange $g_L \leftrightarrow g_R,$
+For neutrinos, `g_lead = g_L` and `g_sub = g_R`; for antineutrinos those
+placements are interchanged.  The neutral-current couplings are:
 
-
-
-This is the standard tree-level $\nu$--$e$ elastic-scattering form used in low-energy neutrino phenomenology. The notation is fully consistent: $g_L$ and $g_R$ always denote the underlying left- and right-handed electron couplings, while the difference between neutrinos and antineutrinos is implemented only through which coupling multiplies the leading term and which one multiplies the $(1-y)^2$ term. In other words, the couplings themselves do not change meaning; only their placement in the cross section changes between $\nu e$ and $\bar{\nu} e$ scattering.
-
-For $\nu_\mu e$ and $\nu_\tau e$ scattering, the code uses the Standard-Model neutral-current couplings
-
-$$
+```math
 g_L = -\frac{1}{2} + \sin^2\theta_W,
 \qquad
 g_R = \sin^2\theta_W.
-$$
+```
 
-For $\nu_e e$ scattering, the charged-current contribution is included through the standard replacement
+For electron flavor, the charged-current contribution is included through:
 
-$$
-g_L \to g_L + 1,
-$$
+```math
+g_L \rightarrow g_L + 1.
+```
 
-so that
+For CF4, the molecule-level electron channel multiplies the per-electron rate
+by:
 
-$$
-g_L = \frac{1}{2} + \sin^2\theta_W,
+```math
+Z_\mathrm{tot} = 6 + 4\times 9 = 42.
+```
+
+### Stopped-Pion DAR Source
+
+The source scripts model the standard stopped-pion chain:
+
+```math
+\pi^+ \rightarrow \mu^+ + \nu_\mu,
 \qquad
-g_R = \sin^2\theta_W.
-$$
+\mu^+ \rightarrow e^+ + \nu_e + \bar{\nu}_\mu.
+```
 
-Accordingly, the larger $\nu_e e$ cross section does not come from a different formula, but from the same formula evaluated with the charged-current-enhanced left-handed coupling. This is the standard low-energy treatment; see, for example, Vogel and Engel, *Phys. Rev. D* **39** (1989) 3378, and the PDG review of neutrino cross sections:
-[https://users.physics.unc.edu/~engelj/papers/ve.pdf](https://users.physics.unc.edu/~engelj/papers/ve.pdf),
-[https://pdg.lbl.gov/2023/reviews/rpp2023-rev-nu-cross-sections.pdf](https://pdg.lbl.gov/2023/reviews/rpp2023-rev-nu-cross-sections.pdf).
+The prompt `nu_mu` is monochromatic:
 
-For $CF_4$, the molecule-level rate is obtained by multiplying the single-electron cross section by the total number of target electrons in one molecule,
+```math
+E_{\nu_\mu}^{\mathrm{prompt}}
+=
+\frac{m_\pi^2 - m_\mu^2}{2m_\pi}
+\simeq 29.79\ \mathrm{MeV}.
+```
 
-$$
-Z_{\mathrm{tot}} = 6 + 4 \times 9 = 42.
-$$
+The delayed Michel spectra extend to:
 
-Accordingly, the repository keeps both the per-electron and per-molecule normalizations explicit when building electron-recoil spectra.
+```math
+E_{\max} = \frac{m_\mu}{2} \simeq 52.83\ \mathrm{MeV}.
+```
 
-### 3. DAR source model
+In code, delayed shapes are normalized differential spectra in MeV^-1.  The
+prompt line is an integrated intensity.  For binned output only, the prompt
+line is placed into the bin containing the line energy and divided by that bin
+width; this is a numerical histogram convention, not physical broadening.
 
-DAR means decay at rest: pions and then muons are assumed to stop before
-decaying, so the source follows the standard stopped-pion chain
+With beam power `P`, proton kinetic energy `E_p`, and yield per proton per
+flavor `y_nu`, the source normalization is:
 
-$$
-\pi^+ \to \mu^+ + \nu_\mu
-$$
+```math
+\dot N_p = \frac{P}{E_p},
+\qquad
+\dot N_\nu = \dot N_p\,y_\nu.
+```
 
-and then
+The transport model is point-source dilution:
 
-$$
-\mu^+ \to e^+ + \nu_e + \bar{\nu}_\mu .
-$$
+```math
+G(L) = \frac{1}{4\pi L^2},
+```
 
-This is the benchmark source picture used for spallation facilities such as
-J-PARC MLF and for ESS-style low-energy CEvNS studies:
-https://arxiv.org/abs/1705.08629
-https://arxiv.org/abs/1911.00762
-https://arxiv.org/abs/2603.05281
+with `L` converted to cm in the implementation.  Thus:
 
-The prompt component is the $\nu_\mu$ from $\pi^+$ DAR. Because this is a
-two-body decay at rest, the neutrino energy is monochromatic:
+```math
+\phi(E) = \dot N_\nu\,G(L)\,f(E)
+```
 
-$$
-E_{\nu_\mu}^{\mathrm{prompt}} = \frac{m_\pi^2 - m_\mu^2}{2 m_\pi} \simeq 29.79\ \mathrm{MeV} .
-$$
+for average delayed flux, and
 
-The delayed components are the $\nu_e$ and $\bar{\nu}_\mu$ from $\mu^+$ DAR.
-They follow the usual Michel shapes and extend up to
+```math
+\Phi(E) = y_\nu\,G(L)\,f(E)
+```
 
-$$
-E_{\max} = \frac{m_\mu}{2} \simeq 52.83\ \mathrm{MeV} .
-$$
+for delayed per-POT fluence.
 
-In the code, the delayed spectra are normalized differential shapes $f(E)$ in
-$\mathrm{MeV}^{-1}$, while the prompt component is treated as an integrated
-line intensity.
+Current source defaults:
 
-POT means protons on target. The source normalization is built from the average
-proton rate and an effective neutrino yield per incoming proton and per flavor.
-With beam power $P$ and proton kinetic energy $E_p$, the code uses
+| Source | Beam power | Proton energy | Repetition metadata | Yield default | Script baseline |
+| --- | ---: | ---: | --- | --- | ---: |
+| ESS | 5.0 MW | 2.0 GeV | 14 Hz, 2.86 ms pulse | 0.3 / proton / flavor | 20 m |
+| SNS FTS | 1.4 MW | 1.0 GeV | 60 Hz, 350 ns spill FWHM | PBW polynomial, about 0.09 / proton / flavor at 1 GeV | 20 m |
+| J-PARC MLF | 1.0 MW | 3.0 GeV | 25 Hz, two 100 ns bunches separated by 600 ns | 0.48 / proton / flavor | 24 m |
 
-$$
-\dot N_p = \frac{P}{E_p}
-$$
+Timing fields are metadata only.  No time-window efficiency, duty-factor
+background rejection, or pulse-shape convolution is applied.
 
-and then
+Source-normalization provenance:
 
-$$
-\dot N_\nu = \dot N_p \, y_\nu .
-$$
+- The `0.3 / proton / flavor` ESS yield at `2 GeV` is explicitly stated in the
+  local axial-vector CEvNS paper, which cites the ESS CEvNS study
+  arXiv:1911.00762.  That paper uses an ESS-inspired detector benchmark with
+  `1.3 MW`, `20 m`, `2 keV`, `50 kg`, and `3 years`; this repository uses the
+  same yield idea but keeps its own editable beam and detector configuration.
+- The ESS script default `5 MW`, `2 GeV`, `14 Hz`, and `2.86 ms` pulse length
+  are facility-design benchmark metadata used for rate scaling and output
+  labels.  Timing is not used in the energy-spectrum calculation.
+- The SNS polynomial labelled `PBW` is an effective yield model already present
+  in the repository.  The README now documents its behavior, but the exact
+  source paper or simulation note for the polynomial coefficients still needs
+  to be attached before formal use.
+- The J-PARC `0.48 / proton / flavor` default is a local benchmark assumption.
+  The local axial-vector paper discusses J-PARC as a relevant facility, but the
+  exact provenance of this number is still a validation gap in the codebase.
 
-Here $y_\nu$ is the benchmark yield per proton per flavor. It is an effective
-normalization choice, not a first-principles hadron-production and transport
-prediction. The current defaults are:
+### Flux Folding
 
-- ESS: $y_\nu = 0.3$ neutrinos / proton / flavor, used as a benchmark in ESS
-  CEvNS literature, including https://arxiv.org/abs/2603.05281
-- J-PARC MLF: $y_\nu = 0.48$ neutrinos / proton / flavor, used here as a
-  practical first-pass benchmark and broadly consistent with recent JSNS2
-  flux-normalization results such as https://arxiv.org/abs/2412.18509
-- SNS FTS: by default the code uses the built-in energy-dependent PBW benchmark
-  model, which gives about $0.090$ neutrinos / proton / flavor at the default
-  $1\ \mathrm{GeV}$ point with the aluminum option
+`rate_estimation.py` computes nuclear recoil spectra per target nucleus:
 
-For quick comparison, the three built-in benchmark source configurations differ
-mainly through the beam and normalization metadata:
+```math
+\frac{dR}{dE_r}
+=
+\int dE_\nu\,
+\phi(E_\nu)
+\frac{d\sigma}{dE_r}(E_\nu,E_r),
+```
 
-| Source | Beam power | Proton energy | Repetition rate | Timing metadata in code | Yield benchmark | Default script baseline |
-| --- | ---: | ---: | ---: | --- | --- | ---: |
-| ESS | $5.0\ \mathrm{MW}$ | $2.0\ \mathrm{GeV}$ | $14\ \mathrm{Hz}$ | pulse length $2.86\ \mathrm{ms}$ | $0.3$ neutrinos / proton / flavor | $20\ \mathrm{m}$ |
-| J-PARC MLF | $1.0\ \mathrm{MW}$ | $3.0\ \mathrm{GeV}$ | $25\ \mathrm{Hz}$ | 2 bunches / spill, $100\ \mathrm{ns}$ width, $600\ \mathrm{ns}$ spacing | $0.48$ neutrinos / proton / flavor | $24\ \mathrm{m}$ |
-| SNS FTS | $1.4\ \mathrm{MW}$ | $1.0\ \mathrm{GeV}$ | $60\ \mathrm{Hz}$ | beam spill FWHM $350\ \mathrm{ns}$ | energy-dependent PBW benchmark, about $0.090$ neutrinos / proton / flavor at the default $1\ \mathrm{GeV}$ point | $20\ \mathrm{m}$ |
+with separate prompt, delayed `nu_e`, and delayed `anti-nu_mu` pieces.
 
-The geometric transport is the simplest point-source dilution model:
+For CF4:
 
-$$
-G(L) = \frac{1}{4 \pi L^2} .
-$$
+```math
+\mathrm{CF}_4 = 1\times {}^{12}\mathrm{C} + 4\times {}^{19}\mathrm{F}.
+```
 
-So the delayed average differential flux is
+The code writes both per-nucleus components and per-molecule sums.
 
-$$
-\phi(E) = \dot N_\nu \, G(L) \, f(E)
-$$
+Numerical integration currently uses trapezoidal integration (`numpy.trapz`) on
+linear recoil and neutrino-energy grids.  The default delayed neutrino grid is
+from `1e-6 MeV` to the Michel endpoint.  The default nuclear recoil grid is
+0 to 120 keV, and the default electron recoil grid is 0 to 60000 keV.
 
-in units of neutrinos$/(\mathrm{cm}^2\,\mathrm{s}\,\mathrm{MeV})$, while the
-delayed per-POT fluence is
+### Detector Scaling And Quenching
 
-$$
-\Phi(E) = y_\nu \, G(L) \, f(E)
-$$
+`detector_estimation.py` uses cylindrical ideal-gas bookkeeping:
 
-in units of neutrinos$/(\mathrm{cm}^2\,\mathrm{POT}\,\mathrm{MeV})$.
+```math
+V = \pi R^2 L,
+\qquad
+n_\mathrm{mol} = \frac{PV}{R_\mathrm{gas}T},
+\qquad
+N_\mathrm{molecules} = n_\mathrm{mol} N_A f_\mathrm{fiducial}.
+```
 
-So in this repository:
+Detector spectra are:
 
-- average flux means neutrinos$/(\mathrm{cm}^2\,\mathrm{s}\,\mathrm{MeV})$
-- per-POT fluence means neutrinos$/(\mathrm{cm}^2\,\mathrm{POT}\,\mathrm{MeV})$
-- prompt line flux means the integrated monochromatic $\nu_\mu$ intensity in
-  neutrinos$/(\mathrm{cm}^2\,\mathrm{s})$
-- prompt line fluence means the corresponding per-POT quantity in
-  neutrinos$/(\mathrm{cm}^2\,\mathrm{POT})$
+```math
+\frac{dN}{dE}
+=
+N_\mathrm{molecules}
+\frac{dR}{dE}
+t_\mathrm{year}.
+```
 
-When a histogram is needed, the physical prompt $\nu_\mu$ line is represented as
-a delta-like numerical contribution: the integrated line is placed into the bin
-containing $E_{\nu_\mu}^{\mathrm{prompt}}$ and divided by that bin width. That
-is why the prompt component appears as one populated bin in exported binned
-spectra. This is not a physical line broadening model; it is the finite-bin
-representation of a monochromatic contribution.
+For nuclear recoils, species-specific quenching-factor curves are read from
+`data/quenching/C_in_CF4.csv` and `data/quenching/F_in_CF4.csv` from TRIM [MIGDAL experiment](https://arxiv.org/pdf/2207.08284).  The code maps:
 
-`ESS_flux.py`, `SNS_flux.py`, and `JPARK_flux.py` are benchmark semi-analytic
-source generators. They are suitable for rate estimates, detector-sizing
-studies, and source-normalization cross-checks, but they are not full facility
-simulations. What they do model:
+```math
+E_{ee}(E_r) = QF(E_r)\,E_r.
+```
 
-- the stopped-pion DAR chain
-- the prompt line energy and delayed Michel spectra
-- benchmark normalization from beam power, proton energy, and yield per proton
-- point-source $1/(4\pi L^2)$ geometry
-- beam timing metadata such as repetition rate, pulse length, or bunch structure
+The QF is linearly interpolated inside the table and held constant outside the
+tabulated range.  The nuclear threshold in `analysis.energy_threshold_kev` is
+interpreted as a measured-energy threshold in keVee for the detector workflow.
 
-What they do not yet model:
+The example detector geometry, pressure, temperature, fiducial fraction, live
+time, and threshold are local working assumptions in `configs/detector_config.json`.
 
-- full hadron-production simulation
-- transport through target, shielding, or hall geometry
-- extended-source geometry
-- wrong-sign contamination or flavor impurities
-- detailed time-distribution modeling beyond stored beam metadata
-- normalization systematics beyond the explicit benchmark yield choice
+## Code And Tool Reference
 
-At the moment all three modules can output delayed average fluxes, prompt line
-fluxes, binned total average fluxes, delayed per-POT fluences, prompt line
-per-POT fluences, and binned total per-POT fluences. In `rate_estimation.py`,
-the average-flux fold can be switched between ESS, SNS, and J-PARC through the
-`source_model` setting in `RateConfig`.
+`cevens.py`
 
-### 4. Flux folding and detector scaling
+- Purpose: target definitions and scattering kernels.
+- Inputs: CLI target, neutrino energy, recoil energy, form-factor options.
+- Outputs: printed or JSON single-point cross-section diagnostics.
+- Main classes/functions: `NuclearTarget`, `HelmFormFactor`,
+  `CEvNSCalculator`, `NeutrinoElectronCalculator`, `carbon12_target`,
+  `fluorine19_target`, `cf4_electron_target`.
+- Example:
 
-`rate_estimation.py` computes the differential event-rate spectrum as
+```bash
+python3 cevens.py --target 19F --enu-mev 30 --er-kev 5 --axial-model hoferichter_19f_central --json
+```
 
-$$\frac{dR}{dE_r} = \int dE_\nu \, \phi(E_\nu) \cdot \frac{d\sigma}{dE_r}$$
+`cohaxial/dar_flux.py`
 
-with an explicit prompt contribution for the monochromatic $\nu_\mu$ line and separate delayed contributions from $\nu_e$ and $\bar{\nu}_\mu$ For $CF_4$, the code keeps the molecule composition explicit:
+- Purpose: shared stopped-pion DAR spectra, point-source geometry, binned line
+  representation, CSV writers, and plots.
+- Inputs: source-specific beam object, baseline, energy grids.
+- Outputs: dictionaries of point-grid or binned flux/fluence components.
+- User-facing entry points are the source scripts, not this helper module.
 
-$$\text{CF}_4 = 1 \times {}^{12}\text{C} + 4 \times {}^{19}\text{F}$$
+`ESS_flux.py`, `SNS_flux.py`, `JPARK_flux.py`
 
-The detector layer then applies ideal-gas bookkeeping:
-$V = \pi R^2 L$,
-$n_{\text{moles}} = \frac{PV}{R_{\text{gas}} T}$,
-$N_{\text{molecules}} = n_{\text{moles}} \cdot N_A \cdot f_{\text{fiducial}}$,
-and converts the molecule-normalized differential rate into detector-level
-spectra and yearly counts:
+- Purpose: source-specific beam metadata plus root-level compatibility API for
+  the shared DAR flux implementation.
+- Inputs: hard-coded benchmark defaults, with beam classes editable/importable
+  from Python.
+- Outputs: source flux and fluence CSV/PNG files.
+- Example:
 
-$$\frac{dN}{dE} = N_{\text{molecules}} \cdot \frac{dR}{dE} \cdot t_{\text{exposure}}$$
+```bash
+python3 ESS_flux.py
+```
 
-The only analysis cut currently implemented is a hard recoil-energy threshold.
+`rate_estimation.py`
+
+- Purpose: fold selected average source flux with CEvNS and neutrino-electron
+  kernels to produce CF4 spectra per molecule.
+- Inputs: CLI options for source, distance, axial model, output directory, and
+  grid sizes.
+- Outputs:
+  - `cf4_differential_rate_per_molecule.csv`
+  - `cf4_electron_differential_rate_per_molecule.csv`
+  - component plots for CF4 composition and fluorine axial fraction.
+- Example:
+
+```bash
+python3 rate_estimation.py --source ess --fluorine-axial-model hoferichter_19f_central
+```
+
+`detector_estimation.py`
+
+- Purpose: convert per-molecule spectra to detector-level spectra using an
+  ideal-gas CF4 detector config and QF remapping.
+- Inputs: detector JSON, molecule-normalized rate CSVs, QF CSVs.
+- Outputs: raw recoil spectra, keVee nuclear spectra, electron spectra, and
+  `cf4_detector_summary.json`.
+- Example:
+
+```bash
+python3 detector_estimation.py --config configs/detector_config.json
+```
+
+`scan_detector_threshold.py`
+
+- Purpose: repeat detector scaling over a threshold grid.
+- Inputs: detector config, threshold grid options.
+- Outputs: threshold-scan CSV/PNG files.
+- Example:
+
+```bash
+python3 scan_detector_threshold.py --threshold-min 0 --threshold-max 15 --n-thresholds 16
+```
+
+`scripts/sanity_check.py`
+
+- Purpose: lightweight validation without adding a test framework.
+- Checks: Michel spectrum normalizations, prompt fluence normalization, CEvNS
+  vector+axial consistency, positive nu-e point, config parsing, and QF
+  monotonicity.
+- Example:
+
+```bash
+python3 scripts/sanity_check.py
+```
+
+`examples/quick_point_check.py`
+
+- Purpose: minimal import-based point calculation.
+- Example:
+
+```bash
+python3 examples/quick_point_check.py
+```
+
+## Validation And Sanity Checks
+
+The repository currently has no formal pytest suite.  The intended quick checks
+are:
+
+```bash
+python3 -m py_compile cohaxial/dar_flux.py ESS_flux.py SNS_flux.py JPARK_flux.py cevens.py rate_estimation.py detector_estimation.py scan_detector_threshold.py scripts/sanity_check.py examples/quick_point_check.py
+python3 scripts/sanity_check.py
+python3 cevens.py --target 19F --enu-mev 30 --er-kev 5 --json
+python3 ESS_flux.py
+python3 rate_estimation.py --source ess --n-er 61 --n-te 101 --n-enu 200 --output-dir cevens_rate_output_check
+python3 detector_estimation.py --config configs/detector_config.json --input-csv cevens_rate_output_check/cf4_differential_rate_per_molecule.csv --input-electron-csv cevens_rate_output_check/cf4_electron_differential_rate_per_molecule.csv --output-dir detector_rate_output_check
+```
+
+The shortened-grid rate command is for smoke testing.  Use the defaults for
+production-like exploratory numbers.
+
+## Extending The Repository
+
+Add a new source:
+
+1. Create a root script or module with a beam metadata class exposing
+   `neutrino_yield_per_proton_per_flavor` and
+   `neutrinos_per_second_per_flavor`.
+2. Instantiate `StoppedPionDARFluxModel` from `cohaxial/dar_flux.py`.
+3. Add the source to `SOURCE_MODELS` in `rate_estimation.py`.
+4. Document yield, beam, baseline, and provenance in this README.
+
+Add a new nuclear target:
+
+1. Add a factory in `cevens.py` returning a `NuclearTarget`.
+2. Specify `Z`, `N`, mass, spin `J`, vector form factor, and axial form factor.
+3. Keep units explicit: mass in GeV, recoil in keV, q^2 in GeV^2.
+4. Add a sanity point and document any nuclear-response reference or gap.
+
+Add a new axial model:
+
+1. Implement a callable `F_A(q2_gev2)`.
+2. Prefer `GenericAxialFormFactor` plus explicit `S_00`, `S_01`, `S_11` inputs
+   if structure functions are available.
+3. For CEvNS, check whether the reference gives transverse-only `S^T_ij` or
+   total spin-dependent responses; do not silently mix dark-matter and CEvNS
+   response conventions.
+4. Add metadata to the target factory so output JSON/diagnostics explain the
+   model choice.
+
+Add a detector-response feature:
+
+1. Keep the existing raw recoil and keVee views distinct.
+2. Add response, efficiency, or smearing after the per-molecule-to-detector
+   scaling, unless the physics specifically belongs earlier.
+3. Preserve the summary JSON keys where possible, or add new keys rather than
+   changing old meanings silently.
+
+Add a plotting routine:
+
+1. Use existing CSV outputs as inputs when possible.
+2. Keep plot scripts separate from physics kernels.
+3. Put generated products in ignored output directories.
+
+## References Present In The Repository
+
+Local PDFs and references already present in comments or notes:
+
+- D. Aristizabal Sierra, P. M. Candela, V. De Romeri, D. K. Papoulias, and
+  L. Trincado S., "Axial-vector neutral-current measurements in coherent
+  elastic neutrino-nucleus scattering experiments", arXiv:2603.05281v1.  Local
+  file: `Paper/AccoppiamentoAssiale_Paper_2603.05281v1 (1).pdf`.  Used here
+  for the fluorine-target motivation, vector/axial CEvNS decomposition,
+  Helm/Klein-Nystrand context, and ESS-like `0.3` neutrino/POT/flavor
+  normalization.
+- R. H. Helm, "Inelastic and Elastic Scattering of 187-MeV Electrons from
+  Selected Even-Even Nuclei", Phys. Rev. 104, 1466 (1956).  Local file:
+  `Paper/CrossSections/HELM_vectorModel.pdf`.  Used as the historical basis for
+  the folded-density Helm form-factor model.
+- S. Klein and J. Nystrand, "Exclusive vector meson production in relativistic
+  heavy ion collisions", Phys. Rev. C 60, 014903 (1999), arXiv:hep-ph/9902259.
+  Local file: `Paper/CrossSections/Klein-Nystrand_vectorModel.pdf`.  Present as
+  an alternative vector form-factor reference, not currently implemented.
+- M. Hoferichter, J. Menendez, and A. Schwenk, "Coherent elastic
+  neutrino-nucleus scattering: EFT analysis and nuclear responses", Phys. Rev.
+  D 102, 074018 (2020), arXiv:2007.08529.  Local file:
+  `Paper/CrossSections/HMS_axialFitparams.pdf`.  Used directly for the `19F`
+  axial implementation.
+- P. Klos, J. Menendez, D. Gazit, and A. Schwenk, Phys. Rev. D 88, 083516
+  (2013), Erratum Phys. Rev. D 89, 029901 (2014).  Cited by HMS and by the code
+  comments for the two-body-current exchange integrals used in the central
+  correction.
+- D. Baxter et al., "Coherent Elastic Neutrino-Nucleus Scattering at the
+  European Spallation Source", JHEP 02 (2020) 123, arXiv:1911.00762.  Cited in
+  the local axial-vector paper for the ESS-like yield and detector context.
+- G. Belanger et al., Comput. Phys. Commun. 180 (2009) 747-767, and the related
+  local spin-dependent approximation PDFs under `Paper/CrossSections/AXialAprox_*`.
+  These are dark-matter spin-dependent references.  They are kept as background
+  but are not the default CEvNS `19F` axial model.
+- Neutrino-electron scattering references already present in repository notes:
+  Vogel and Engel, Phys. Rev. D 39 (1989) 3378, plus PDG neutrino cross-section
+  conventions.
+
+Documentation/validation gaps:
+
+- The exact provenance of the SNS PBW polynomial coefficients should be checked
+  against the intended SNS/COHERENT benchmark source.
+- The J-PARC default yield `0.48 / proton / flavor` should be tied to the final
+  source-normalization reference before use in a formal result.
+- The QF CSV tables are used as input data, but their measurement/simulation
+  provenance is not documented in machine-readable metadata.
+- The local `Paper/` folder is ignored by git; references there are useful for
+  the local researcher but should not be assumed to exist in a fresh clone.
+
+## Known Limitations And WIP Notes
+
+- No detector backgrounds, beam-related backgrounds, or cosmogenic backgrounds.
+- No timing cuts, pulse-window optimization, or time-profile convolution.
+- No detector response beyond hard threshold and QF remapping.
+- No efficiency model, trigger model, reconstruction smearing, or resolution.
+- No uncertainty propagation for source yield, form factors, quenching factors,
+  detector geometry, gas state, or live time.
+- No full hadron-production, target-transport, shielding, hall-geometry, or
+  extended-source source simulation.
+- The `19F` central axial option is a single central-value implementation, not
+  an uncertainty scan.
+- `12C` is fixed as spin-zero with no axial term.
+- Recoil and neutrino-energy grids are linear and should be convergence-checked
+  for any final plot or number.
+- Generated outputs are useful working products, not curated reference data.

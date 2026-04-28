@@ -11,7 +11,7 @@ Design goals
 - A generic exact interface for the axial structure functions S_00, S_01, S_11.
 - Two literature-backed Hoferichter/Menendez/Schwenk 19F axial levels:
   a fast polynomial-fit transverse response and a central response including
-  delta0/delta00 corrections.
+  the transverse delta0 correction.
 - A deliberately simple toy axial model for debugging only.
 - Units chosen for convenience in phenomenology:
     * neutrino energy: MeV
@@ -39,10 +39,11 @@ is provided.
 
 For 19F, the built-in Hoferichter models follow arXiv:2007.08529 / PRD 102
 (2020): Eq. (66) for the vector+axial CEvNS split, Eq. (67) for F_A,
-Eqs. (80)-(85) for S00/S01/S11, Eq. (86) for delta0/delta00, Table I for
-gA/gAs/rA, Table V for two-body-current central inputs, Table VIII for the
-19F polynomial response coefficients and b, and Table IV only as a q2 -> 0
-spin-expectation cross-check.
+Eq. (62) and Sec. III E for the CEvNS transverse-response convention, Eq. (86)
+for the transverse delta0 correction, Table I for gA/gAs/rA, Table V for
+two-body-current central inputs, Table VIII for the 19F polynomial response
+coefficients and b, and Table IV only as a q2 -> 0 spin-expectation
+cross-check.
 
 The module also includes Standard-Model neutrino-electron elastic scattering,
 which is useful for gas targets such as CF4 where electron recoils can provide
@@ -234,7 +235,7 @@ class HoferichterDeltaCorrections(Protocol):
 
 @dataclass(frozen=True)
 class HoferichterCentralDeltaCorrections:
-    """Central delta0/delta00 prescription for the detailed 19F model.
+    """Central HMS correction helper for the detailed 19F model.
 
     Implements Hoferichter, Menendez, Schwenk Eq. (86), with the two-body
     current pieces delta a(q^2) and delta a^P(q^2) from Eqs. (75)-(76).
@@ -386,13 +387,16 @@ class Hoferichter19FTransverseStructureFunctions:
     Schwenk, "Coherent elastic neutrino-nucleus scattering: EFT analysis and
     nuclear responses", arXiv:2007.08529 / PRD 102 (2020).
 
-    Eqs. (80)-(85) form S00/S01/S11 from proton/neutron transverse responses.
-    The fast model sets delta0=delta00=0; the central model passes explicit
-    Eq. (86) corrections through the corrections object.
+    Eq. (62) and Sec. III E state that the CEvNS axial cross section uses the
+    transverse spin response S^T_ij, so this class uses the Sigma-prime
+    coefficients only. The Sigma-double-prime coefficients are longitudinal
+    response inputs and are kept here only so the Table VIII provenance remains
+    visible for future extensions; they are not included in the CEvNS F_A used
+    by this repository.
+
     With gAs=0 and no delta corrections, the polynomial-fit coefficients give
-    FA(0) around 2.25 for the Eq. (67) normalization. This is the same
-    q2 -> 0 logic as the Table IV spin-expectation cross-check, but the
-    polynomial response is the model input used here.
+    FA(0) around 1.5 for the Eq. (67) normalization, consistent with the
+    Table IV spin-expectation cross-check.
     """
 
     b_fm: float = 1.7623
@@ -422,29 +426,19 @@ class Hoferichter19FTransverseStructureFunctions:
 
         sigma_prime_p = self.sigma_prime_p(u)
         sigma_prime_n = self.sigma_prime_n(u)
-        sigma_double_prime_p = self.sigma_double_prime_p(u)
-        sigma_double_prime_n = self.sigma_double_prime_n(u)
-
         # Eq. (85): isoscalar/isovector combinations F^+ = F^p + F^n,
         # F^- = F^p - F^n. For 19F, the Table VIII sum over L has only L=1.
         sigma_prime_plus = sigma_prime_p + sigma_prime_n
         sigma_prime_minus = sigma_prime_p - sigma_prime_n
-        sigma_double_prime_plus = sigma_double_prime_p + sigma_double_prime_n
-        sigma_double_prime_minus = sigma_double_prime_p - sigma_double_prime_n
 
         if self.corrections is None:
             delta0 = 0.0
-            delta00 = 0.0
         else:
             delta0 = self.corrections.delta0(q2_gev2)
-            delta00 = self.corrections.delta00(q2_gev2)
 
-        s00 = sigma_prime_plus ** 2 + sigma_double_prime_plus ** 2
-        s11 = ((1.0 + delta0) * sigma_prime_minus) ** 2 + ((1.0 + delta00) * sigma_double_prime_minus) ** 2
-        s01 = (
-            2.0 * (1.0 + delta0) * sigma_prime_plus * sigma_prime_minus
-            + 2.0 * (1.0 + delta00) * sigma_double_prime_plus * sigma_double_prime_minus
-        )
+        s00 = sigma_prime_plus ** 2
+        s11 = ((1.0 + delta0) * sigma_prime_minus) ** 2
+        s01 = 2.0 * (1.0 + delta0) * sigma_prime_plus * sigma_prime_minus
         return s00, s01, s11
 
     def s00(self, q2_gev2: float) -> float:
@@ -462,7 +456,7 @@ class Hoferichter19FFastAxial:
     """Fast default 19F axial form factor from Hoferichter et al.
 
     Level 1 model: Table VIII polynomial-fit transverse responses, gAs=0, and
-    delta0=delta00=0. This is the default because it is fast and uses the
+    delta0=0. This is the default because it is fast and uses the
     literature-backed shell-model response without the extra correction inputs.
     """
 
@@ -495,7 +489,7 @@ class Hoferichter19FCentralAxial(Hoferichter19FFastAxial):
 
     Level 2 model: the same Table VIII 19F polynomial-fit transverse responses,
     Table I gA/gAs/axial-radius central inputs, Table V rho/c_i/cD central
-    inputs, and Eq. (86) delta0(q^2), delta00(q^2) corrections.
+    inputs, and the Eq. (86) transverse delta0(q^2) correction.
     """
 
     structures: Hoferichter19FTransverseStructureFunctions = field(
@@ -873,7 +867,7 @@ def fluorine19_target(
         note = (
             "Fast literature-backed 19F axial model using Hoferichter, Menendez, "
             "Schwenk Appendix E Table VIII transverse shell-model polynomial fits; "
-            "gAs=0 and delta0/delta00 are set to zero."
+            "gAs=0 and the transverse delta0 correction is set to zero."
         )
     elif axial_model_key in {"hoferichter_19f_central", "central", "hms_19f_central"}:
         axial = Hoferichter19FCentralAxial()
@@ -881,7 +875,7 @@ def fluorine19_target(
         note = (
             "Central Hoferichter 19F axial model using Table VIII polynomial fits, "
             "Table I gA/gAs/axial-radius inputs, Table V rho/c_i/cD inputs, and "
-            "Eq. (86) delta0/delta00 corrections."
+            "the Eq. (86) transverse delta0 correction."
         )
     elif axial_model_key == "approx":
         axial = Hoferichter19FFastAxial()
@@ -929,21 +923,21 @@ def fluorine19_target(
         metadata.update({
             "reference": "Hoferichter, Menendez, Schwenk, PRD 102 (2020), arXiv:2007.08529",
             "coefficient_table": "Appendix E, Table VIII",
-            "response_type": "transverse shell-model polynomial fits F^{Sigma_0} / F^{Sigma_{00}}, L=1",
+            "response_type": "CEvNS transverse shell-model polynomial fits F^{Sigma'}, L=1",
             "b_fm": axial.structures.b_fm,
             "J": 0.5,
             "gA": axial.gA,
             "gAs": axial.gAs,
         })
     if axial_model == "hoferichter_19f_fast":
-        metadata["delta_corrections"] = "delta0=0, delta00=0"
+        metadata["delta_corrections"] = "delta0=0 for the transverse response"
         if axial_model_key == "approx":
             metadata["warning"] = "Legacy 'approx' now maps to 'hoferichter_19f_fast'; use 'toy' for the old debug model."
     if axial_model == "hoferichter_19f_central":
         corrections = axial.structures.corrections
         if isinstance(corrections, HoferichterCentralDeltaCorrections):
             metadata.update({
-                "delta_corrections": "delta0(q^2), delta00(q^2) included from Eq. (86)",
+                "delta_corrections": "delta0(q^2) applied to the transverse CEvNS response from Eq. (86)",
                 "rho_fm3": corrections.rho_fm3,
                 "c1_gev_inv": corrections.c1_gev_inv,
                 "c3_gev_inv": corrections.c3_gev_inv,
